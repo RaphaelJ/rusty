@@ -30,3 +30,9 @@
 
 # Debug files
 *.dSYM/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
