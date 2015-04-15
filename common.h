@@ -1,7 +1,7 @@
-/*
- * Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
- * University of Liege.
- */
+//
+// Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
+// University of Liege.
+//
 
 #ifndef __TCP_MPIPE_COMMON_H__
 #define __TCP_MPIPE_COMMON_H__
