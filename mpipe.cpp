@@ -14,8 +14,8 @@
 #include <tmc/alloc.h>      // tmc_alloc_map, tmc_alloc_set_home,
                             // tmc_alloc_set_pagesize.
 
-#include "common.h"
-#include "mpipe.h"
+#include "common.hpp"
+#include "mpipe.hpp"
 
 using namespace std;
 

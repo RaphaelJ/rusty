@@ -3,8 +3,8 @@
 // University of Liege.
 //
 
-#ifndef __TCP_MPIPE_COMMON_H__
-#define __TCP_MPIPE_COMMON_H__
+#ifndef __TCP_MPIPE_COMMON_HPP__
+#define __TCP_MPIPE_COMMON_HPP__
 
 #include <tmc/task.h>   // tmc_task_die
 
@@ -33,4 +33,4 @@
         DIE("%s (errno: %d)", (WHAT), errno);                                  \
   } while (0)
 
-#endif /* __TCP_MPIPE_COMMON_H__ */
+#endif /* __TCP_MPIPE_COMMON_HPP__ */

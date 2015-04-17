@@ -10,7 +10,7 @@
 #include <tmc/cpus.h>       // tmc_cpus_*
 #include <sys/dataplane.h>  // set_dataplane
 
-#include "common.h"
+#include "common.hpp"
 
 using namespace std;
 

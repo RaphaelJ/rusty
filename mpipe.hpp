@@ -3,8 +3,8 @@
 // University of Liege.
 //
 
-#ifndef __TCP_MPIPE_MPIPE_H__
-#define __TCP_MPIPE_MPIPE_H__
+#ifndef __TCP_MPIPE_MPIPE_HPP__
+#define __TCP_MPIPE_MPIPE_HPP__
 
 #include <array>
 #include <vector>
@@ -115,4 +115,4 @@ void mpipe_close(mpipe_env_t *mpipe_env);
 // environment.
 struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env);
 
-#endif /* __TCP_MPIPE_MPIPE_H__ */
+#endif /* __TCP_MPIPE_MPIPE_HPP__ */

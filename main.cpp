@@ -14,9 +14,11 @@
 // NOTE: To remove and put in mpipe.cpp
 #include <gxio/mpipe.h> // gxio_mpipe_*, GXIO_MPIPE_*
 
-#include "common.h"
-#include "cpu.h"
-#include "mpipe.h"
+#include "common.hpp"
+#include "cpu.hpp"
+#include "mpipe.hpp"
+
+#include "allocator.hpp"
 
 using namespace std;
 
@@ -49,6 +51,8 @@ int main(int argc, char **argv)
         hw_addr_octet[0], hw_addr_octet[1], hw_addr_octet[2], hw_addr_octet[3],
         hw_addr_octet[4], hw_addr_octet[5], inet_ntoa(args.ipv4)
     );
+
+    TileAllocator<int> allocator();
 
     while (1) {
         gxio_mpipe_idesc_t idesc;
