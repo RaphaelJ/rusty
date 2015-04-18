@@ -2,6 +2,8 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
+// Defines a C++ STL allocator which wraps the TMC memory management library.
+//
 
 #ifndef __TCP_MPIPE_ALLOCATOR_HPP__
 #define __TCP_MPIPE_ALLOCATOR_HPP__
@@ -15,6 +17,8 @@
 
 using namespace std;
 
+namespace tcp_mpipe {
+
 // Allocator which will use the provided tmc_alloc_t configuration to allocate
 // an heap on which it will be able to allocate data.
 //
@@ -24,16 +28,15 @@ using namespace std;
 // Multiple threads should be able to allocate/deallocate memory concurrently.
 //
 // Every allocated data will be freed when the object and all of its copies will
-// be destucted. Thus you must at least have one copy of TileAllocator alive to
-// be able to use allocated memories.
+// be destucted. Thus you must at least have one copy of tile_allocator_t alive
+// to be able to use allocated memories.
 template <typename T>
-struct TileAllocator {
-public:
+struct tile_allocator_t {
     typedef T value_type;
 
     // Creates an allocator which uses a tmc_alloc_t initialized with
     // TMC_ALLOC_INIT to allocate pages for the heap.
-    inline TileAllocator(void)
+    inline tile_allocator_t(void)
     {
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
         _init_mspace(&alloc);
@@ -41,7 +44,7 @@ public:
 
     // Creates an allocator which uses the given tmc_alloc_t to allocate pages
     // for the heap.
-    inline TileAllocator(tmc_alloc_t *alloc)
+    inline tile_allocator_t(tmc_alloc_t *alloc)
     {
         _init_mspace(&alloc);
     }
@@ -65,7 +68,7 @@ public:
     // * TMC_ALLOC_HOME_INCOHERENT. Memory is incoherent between CPUs, and
     //   requires explicit flush and invalidate to enforce coherence.
     // * TMC_ALLOC_HOME_DEFAULT. Use operating system default.
-    inline TileAllocator(int home)
+    inline tile_allocator_t(int home)
     {
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
         tmc_alloc_set_home(&alloc, home);
@@ -79,15 +82,16 @@ public:
     // The size is rounded up to the nearest page size. If no single page can
     // hold the given number of bytes, the largest page size is selected, and
     // the method returns NULL.
-    inline TileAllocator(size_t pagesize)
+    inline tile_allocator_t(size_t pagesize)
     {
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
         tmc_alloc_set_pagesize(&alloc, pagesize);
         _init_mspace(&alloc);
     }
 
-    // Combines TileAllocator(int home) and TileAllocator(size_t pagesize).
-    inline TileAllocator(int home, size_t pagesize)
+    // Combines tile_allocator_t(int home) and
+    // tile_allocator_t(size_t pagesize).
+    inline tile_allocator_t(int home, size_t pagesize)
     {
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
         tmc_alloc_set_home(&alloc, home);
@@ -112,14 +116,14 @@ public:
     }
 
     friend inline bool operator==(
-        const TileAllocator<T>& a, const TileAllocator<T>& b
+        const tile_allocator_t<T>& a, const tile_allocator_t<T>& b
     )
     {
         return *(a._mspace) == *(b._mspace);
     }
 
     friend inline bool operator!=(
-        const TileAllocator<T>& a, const TileAllocator<T>& b
+        const tile_allocator_t<T>& a, const tile_allocator_t<T>& b
     )
     {
         return !(a == b);
@@ -127,7 +131,7 @@ public:
 
 private:
     // Uses a shared_ptr to the tmc_mspace with a destructor which frees the
-    // memory space once no more TileAllocator are referencing it.
+    // memory space once no more tile_allocator_t are referencing it.
 
     shared_ptr<tmc_mspace> _mspace;
 
@@ -144,5 +148,7 @@ private:
         delete mspace;
     }
 };
+
+} /* namespace tcp_mpipe */
 
 #endif /* __TCP_MPIPE_ALLOCATOR_HPP__ */

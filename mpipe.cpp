@@ -2,6 +2,8 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
+// Wrappers for mPIPE functions. Makes initialization of the driver easier.
+//
 
 #include <algorithm>
 #include <cassert>
@@ -18,6 +20,8 @@
 #include "mpipe.hpp"
 
 using namespace std;
+
+namespace tcp_mpipe {
 
 // Checks for errors from the GXIO API, which returns negative error codes.
 #define VERIFY_GXIO(VAL, WHAT)                                                 \
@@ -397,5 +401,7 @@ struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env)
         }
     };
 }
+
+} /* namespace tcp_mpipe */
 
 #undef VERIFY_GXIO

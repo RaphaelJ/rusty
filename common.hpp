@@ -2,11 +2,15 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
+// Various utilities.
+//
 
 #ifndef __TCP_MPIPE_COMMON_HPP__
 #define __TCP_MPIPE_COMMON_HPP__
 
 #include <tmc/task.h>   // tmc_task_die
+
+namespace tcp_mpipe {
 
 #ifdef NDEBUG
     #define TCP_MPIPE_DEBUG(MSG, ...)
@@ -32,5 +36,7 @@
     if (__val == -1)                                                           \
         DIE("%s (errno: %d)", (WHAT), errno);                                  \
   } while (0)
+
+} /* namespace tcp_mpipe */
 
 #endif /* __TCP_MPIPE_COMMON_HPP__ */

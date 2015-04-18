@@ -2,6 +2,8 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
+// Provides functions to manage dataplane Tiles.
+//
 
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +15,8 @@
 #include "common.hpp"
 
 using namespace std;
+
+namespace tcp_mpipe {
 
 void bind_to_dataplane(unsigned int n)
 {
@@ -44,3 +48,5 @@ void bind_to_dataplane(unsigned int n)
     VERIFY_ERRNO(result, "set_dataplane()");
     #endif
 }
+
+} /* namespace tcp_mpipe */

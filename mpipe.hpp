@@ -2,6 +2,8 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
+// Wrappers for mPIPE functions. Makes initialization of the driver easier.
+//
 
 #ifndef __TCP_MPIPE_MPIPE_HPP__
 #define __TCP_MPIPE_MPIPE_HPP__
@@ -12,6 +14,8 @@
 #include <gxio/mpipe.h> // gxio_mpipe_*, GXIO_MPIPE_*
 
 using namespace std;
+
+namespace tcp_mpipe {
 
 // -----------------------------------------------------------------------------
 
@@ -114,5 +118,7 @@ void mpipe_close(mpipe_env_t *mpipe_env);
 // Returns the hardware address of the link related to the given mPIPE
 // environment.
 struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env);
+
+} /* namespace tcp_mpipe */
 
 #endif /* __TCP_MPIPE_MPIPE_HPP__ */
