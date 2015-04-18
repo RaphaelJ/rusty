@@ -72,8 +72,12 @@ static const array<buffer_info_t, 8> BUFFERS_STACKS {
 struct buffer_stack_t {
     const buffer_info_t *info;
     unsigned int        id;
-    void                *mem;
-    void                *buffer_mem;
+
+    void                *mem;           // First byte of the buffer stack.
+    void                *buffer_mem;    // Packet buffer memory allocated just
+                                        // after the buffer stack.
+    size_t              mem_size;       // Number of bytes allocated for the
+                                        // buffer stack and its buffers.
 };
 
 // Contains references to resources needed by the mPIPE API.
@@ -112,7 +116,7 @@ struct mpipe_env_t {
 // buffers.
 void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name);
 
-// Release mPIPE resources referenced by the given mpipe_env_t.
+// Releases mPIPE resources referenced by the given mpipe_env_t.
 void mpipe_close(mpipe_env_t *mpipe_env);
 
 // Returns the hardware address of the link related to the given mPIPE

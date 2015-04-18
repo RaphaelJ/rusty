@@ -340,8 +340,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             buffer_stack_t buffer_stack = {
                 &buffer_info,
                 stack_id,
-                mem,
-                mem + stack_size
+                mem, mem + stack_size, total_size
             };
 
             mpipe_env->buffer_stacks.push_back(buffer_stack);
@@ -375,11 +374,32 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
 
 void mpipe_close(mpipe_env_t *mpipe_env)
 {
-    int result = gxio_mpipe_link_close(&(mpipe_env->link));
+    int result;
+
+    // Releases the mPIPE context
+
+    result = gxio_mpipe_link_close(&(mpipe_env->link));
     VERIFY_GXIO(result, "gxio_mpipe_link_close(()");
 
     result = gxio_mpipe_destroy(&(mpipe_env->context));
     VERIFY_GXIO(result, "gxio_mpipe_destroy()");
+
+    // Releases rings memory
+
+    size_t notif_ring_size = IQUEUE_ENTRIES * sizeof(gxio_mpipe_idesc_t);
+    result = tmc_alloc_unmap(mpipe_env->notif_ring_mem, notif_ring_size );
+    VERIFY_ERRNO(result, "tmc_alloc_unmap()");
+
+    size_t edma_ring_size = EQUEUE_ENTRIES * sizeof(gxio_mpipe_edesc_t);
+    result = tmc_alloc_unmap(mpipe_env->edma_ring_mem, edma_ring_size);
+    VERIFY_ERRNO(result, "tmc_alloc_unmap()");
+
+    // Releases buffers memory
+
+    for (const buffer_stack_t& buffer_stack : mpipe_env->buffer_stacks) {
+        result = tmc_alloc_unmap(buffer_stack.mem, buffer_stack.mem_size);
+        VERIFY_ERRNO(result, "tmc_alloc_unmap()");
+    }
 }
 
 struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env)
