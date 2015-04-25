@@ -7,14 +7,16 @@
 #include <cstdlib>
 #include <cinttypes>
 
-#include <arpa/inet.h>      // inet_ntoa, inet_pton
-#include <netinet/in.h>     // struct in_addr
-#include <net/ethernet.h>   // struct ether_addr
+#include <arpa/inet.h>      // inet_ntoa(), inet_pton()
+#include <netinet/in.h>     // in_addr
+#include <netinet/ether.h>  // ether_ntoa()
+#include <net/ethernet.h>   // ether_addr, ETHERTYPE_*
 
 // NOTE: To remove and put in mpipe.cpp
-#include <gxio/mpipe.h> // gxio_mpipe_*, GXIO_MPIPE_*
+#include <gxio/mpipe.h>     // gxio_mpipe_*, GXIO_MPIPE_*
 
 #include "allocator.hpp"
+#include "arp.hpp"
 #include "common.hpp"
 #include "cpu.hpp"
 #include "mpipe.hpp"
@@ -25,17 +27,17 @@ using namespace tcp_mpipe;
 // Parsed CLI arguments.
 struct args_t {
     char            *link_name;
-    struct in_addr  ipv4;
+    struct in_addr  ipv4_addr;
 };
 
-void print_usage(char **argv);
+static void _print_usage(char **argv);
 
-bool parse_args(int argc, char **argv, args_t *args);
+static bool _parse_args(int argc, char **argv, args_t *args);
 
 int main(int argc, char **argv)
 {
     args_t args;
-    if (!parse_args(argc, argv, &args))
+    if (!_parse_args(argc, argv, &args))
         return EXIT_FAILURE;
 
     bind_to_dataplane(0);
@@ -43,13 +45,13 @@ int main(int argc, char **argv)
     mpipe_env_t mpipe_env;
     mpipe_init(&mpipe_env, args.link_name);
 
-    u_int8_t *hw_addr_octet = mpipe_ether_addr(&mpipe_env).ether_addr_octet;
+    arp_env_t arp_env;
+    arp_init(&arp_env, &mpipe_env, args.ipv4_addr);
+
     TCP_MPIPE_DEBUG(
-        "mPIPE driver started on interface %s (%02x:%02x:%02x:%02x:%02x:%02x) "
-        "with %s as IPv4",
-        args.link_name,
-        hw_addr_octet[0], hw_addr_octet[1], hw_addr_octet[2], hw_addr_octet[3],
-        hw_addr_octet[4], hw_addr_octet[5], inet_ntoa(args.ipv4)
+        "mPIPE driver started on interface %s (%s) with %s as IPv4",
+        args.link_name, ether_ntoa(&(arp_env.ether_addr)),
+        inet_ntoa(args.ipv4_addr)
     );
 
     tile_allocator_t<int> allocator();
@@ -58,8 +60,27 @@ int main(int argc, char **argv)
         gxio_mpipe_idesc_t idesc;
         gxio_mpipe_iqueue_get(&(mpipe_env.iqueue), &idesc);
 
-        uint16_t ethertype = gxio_mpipe_idesc_get_ethertype(&idesc);
-        TCP_MPIPE_DEBUG("Received ethertype %" PRIu16, ethertype);
+        if (gxio_mpipe_iqueue_drop_if_bad(&(mpipe_env.iqueue), &idesc)) {
+            TCP_MPIPE_DEBUG("Ethernet frame dropped");
+            continue;
+        }
+
+        uint16_t ether_type = gxio_mpipe_idesc_get_ethertype(&idesc);
+        switch (ether_type) {
+        case ETHERTYPE_ARP:
+            TCP_MPIPE_DEBUG("Received ARP Ethernet frame");
+            arp_receive(&arp_env, mpipe_get_l3_cursor(&idesc));
+            break;
+        case ETHERTYPE_IP:
+            TCP_MPIPE_DEBUG("Received IP Ethernet frame");
+            break;
+        default:
+            TCP_MPIPE_DEBUG(
+                "Received unknown Ethernet frame (Ether type: %" PRIu16 "). "
+                "Drop frame.", ether_type
+            );
+            gxio_mpipe_iqueue_drop(&(mpipe_env.iqueue), &idesc);
+        }
     }
 
     mpipe_close(&mpipe_env);
@@ -67,7 +88,7 @@ int main(int argc, char **argv)
     return EXIT_SUCCESS;
 }
 
-void print_usage(char **argv)
+static void _print_usage(char **argv)
 {
     fprintf(stderr, "Usage: %s <link> <ipv4>\n", argv[0]);
 }
@@ -75,18 +96,18 @@ void print_usage(char **argv)
 // Parses CLI arguments.
 //
 // Fails on a malformed command.
-bool parse_args(int argc, char **argv, args_t *args)
+static bool _parse_args(int argc, char **argv, args_t *args)
 {
     if (argc != 3) {
-        print_usage(argv);
+        _print_usage(argv);
         return false;
     }
 
     args->link_name = argv[1];
 
-    if (inet_pton(AF_INET, argv[2], &(args->ipv4)) != 1) {
+    if (inet_pton(AF_INET, argv[2], &(args->ipv4_addr)) != 1) {
         fprintf(stderr, "Failed to parse the IPv4.\n");
-        print_usage(argv);
+        _print_usage(argv);
         return false;
     }
 

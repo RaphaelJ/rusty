@@ -12,6 +12,10 @@
 
 namespace tcp_mpipe {
 
+//
+// Macros
+//
+
 #ifdef NDEBUG
     #define TCP_MPIPE_DEBUG(MSG, ...)
 #else
@@ -31,11 +35,16 @@ namespace tcp_mpipe {
 
 // Checks for errors in function which returns -1 and sets errno on failure.
 #define VERIFY_ERRNO(VAL, WHAT)                                                \
-  do {                                                                         \
-    long __val = (long) (VAL);                                                 \
-    if (__val == -1)                                                           \
-        DIE("%s (errno: %d)", (WHAT), errno);                                  \
-  } while (0)
+    do {                                                                       \
+        long __val = (long) (VAL);                                             \
+        if (__val == -1)                                                       \
+            DIE("%s (errno: %d)", (WHAT), errno);                              \
+    } while (0)
+
+// Branch prediction hints.
+#define LIKELY(x)       __builtin_expect(!!(x), 1)
+#define UNLIKELY(x)     __builtin_expect((x), 0)
+
 
 } /* namespace tcp_mpipe */
 

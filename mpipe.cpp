@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 
 #include <gxio/mpipe.h>     // gxio_mpipe_*
 #include <net/ethernet.h>   // struct ether_addr
@@ -17,6 +18,7 @@
                             // tmc_alloc_set_pagesize.
 
 #include "common.hpp"
+
 #include "mpipe.hpp"
 
 using namespace std;
@@ -116,12 +118,14 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
-        mpipe_env->notif_ring_mem = tmc_alloc_map(&alloc, ring_size);
+        mpipe_env->notif_ring_mem = (char *) tmc_alloc_map(
+            &alloc, ring_size
+        );
         if (mpipe_env->notif_ring_mem == NULL)
             DIE("tmc_alloc_map()");
 
         // ring is 4 KB aligned.
-        assert(((size_t) mpipe_env->notif_ring_mem & 0xFFF) == 0);
+        assert(((intptr_t) mpipe_env->notif_ring_mem & 0xFFF) == 0);
 
         // Initializes an iqueue which uses the ring memory and the mPIPE
         // context.
@@ -165,6 +169,8 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
     //
     // Initializes a single eDMA ring with its equeue wrapper.
     //
+    // For egress buffers, we allocate the largest 
+    //
 
     {
         // Allocates a single eDMA ring ID. Multiple eDMA rings could be used
@@ -175,7 +181,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
 
         size_t ring_size = EQUEUE_ENTRIES * sizeof(gxio_mpipe_edesc_t);
 
-        // The eDMA ring must be 4 KB aligned and must reside on a single
+        // The eDMA ring must be 1 KB aligned and must reside on a single
         // physically contiguous memory. So we allocate a page sufficiently
         // large to hold it.
         // As only the mPIPE hardware and no Tile will read from this memory,
@@ -196,12 +202,14 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
-        mpipe_env->edma_ring_mem = tmc_alloc_map(&alloc, ring_size);
+        mpipe_env->edma_ring_mem = (char *) tmc_alloc_map(
+            &alloc, ring_size
+        );
         if (mpipe_env->edma_ring_mem == NULL)
             DIE("tmc_alloc_map()");
 
-        // ring is 4 KB aligned.
-        assert(((size_t) mpipe_env->edma_ring_mem & 0xFFF) == 0);
+        // ring is 1 KB aligned.
+        assert(((intptr_t) mpipe_env->edma_ring_mem & 0x3FF) == 0);
 
         // Initializes an equeue which uses the eDMA ring memory and the channel
         // associated with the context's link.
@@ -225,8 +233,8 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
     {
         // Counts the number of non-empty buffer stacks.
         int n_stacks = 0;
-        for (buffer_info_t buffer_info : BUFFERS_STACKS) {
-            if (buffer_info.count > 0)
+        for (const buffer_stack_info_t& stack_info : BUFFERS_STACKS) {
+            if (stack_info.count > 0)
                 n_stacks++;
         }
 
@@ -237,9 +245,9 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
         mpipe_env->buffer_stacks.reserve(n_stacks);
 
         // Allocates, initializes and registers the memory for each stacks.
-        for (const buffer_info_t& buffer_info : BUFFERS_STACKS) {
+        for (const buffer_stack_info_t& stack_info : BUFFERS_STACKS) {
             // Skips unused buffer types.
-            if (buffer_info.count <= 0)
+            if (stack_info.count <= 0)
                 continue;
 
             // First we need to compute the exact memory usage of the stack
@@ -253,7 +261,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             // add a padding after the stack.
 
             size_t stack_size = gxio_mpipe_calc_buffer_stack_bytes(
-                buffer_info.count
+                stack_info.count
             );
 
             // Adds a padding to have a 128 bytes aligned address for the packet
@@ -261,10 +269,10 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             stack_size += -(long)stack_size & (128 - 1);
 
             size_t buffer_size = gxio_mpipe_buffer_size_enum_to_buffer_size(
-                buffer_info.size
+                stack_info.size
             );
 
-            size_t total_size = stack_size + buffer_info.count * buffer_size;
+            size_t total_size = stack_size + stack_info.count * buffer_size;
 
             // Uses the distributed caching mechanism for packet data because of
             // being too large to fit in a single Tile local (L2) cache.
@@ -293,7 +301,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             TCP_MPIPE_DEBUG(
                 "Allocating %lu x %zu bytes buffers (%zu bytes) and a %zu "
                 "bytes stack on %zu x %zu bytes page(s)",
-                buffer_info.count, buffer_size, total_size, stack_size,
+                stack_info.count, buffer_size, total_size, stack_size,
                 (total_size + 1) / tmc_alloc_get_pagesize(&alloc), 
                 tmc_alloc_get_pagesize(&alloc)
             );
@@ -302,12 +310,12 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             if (mem == NULL)
                 DIE("tmc_alloc_map()");
 
-            assert(((size_t) mem & 0xFFFF) == 0); // mem is 64 KB aligned.
+            assert(((intptr_t) mem & 0xFFFF) == 0); // mem is 64 KB aligned.
 
             // Initializes the buffer stack.
 
             result = gxio_mpipe_init_buffer_stack(
-                context, stack_id, buffer_info.size, mem, stack_size, 0
+                context, stack_id, stack_info.size, mem, stack_size, 0
             );
             VERIFY_GXIO(result, "gxio_mpipe_init_buffer_stack()");
 
@@ -338,8 +346,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             // Registers the stack resources in the environment.
 
             buffer_stack_t buffer_stack = {
-                &buffer_info,
-                stack_id,
+                &stack_info, stack_id, buffer_size,
                 mem, mem + stack_size, total_size
             };
 
@@ -347,6 +354,15 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
 
             stack_id++;
         }
+
+        // Sorts 'mpipe_env->buffer_stacks' by increasing buffer sizes.
+
+        sort(
+            mpipe_env->buffer_stacks.begin(), mpipe_env->buffer_stacks.end(),
+            [](const buffer_stack_t& a, const buffer_stack_t& b) {
+                return a.info->size < b.info->size;
+            }
+        );
     }
 
     //
@@ -400,6 +416,18 @@ void mpipe_close(mpipe_env_t *mpipe_env)
         result = tmc_alloc_unmap(buffer_stack.mem, buffer_stack.mem_size);
         VERIFY_ERRNO(result, "tmc_alloc_unmap()");
     }
+}
+
+gxio_mpipe_bdesc_t mpipe_alloc_buffer(mpipe_env_t *mpipe_env, size_t size)
+{
+    // Finds the first buffer size large enough to hold the requested buffer.
+    for (const buffer_stack_t &stack : mpipe_env->buffer_stacks) {
+        if (stack.buffer_size >= size)
+            return gxio_mpipe_pop_buffer_bdesc(&(mpipe_env->context), stack.id);
+    }
+
+    // TODO: build a chained buffer if possible.
+    DIE("No buffer is sufficiently large to hold the requested size.");
 }
 
 struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env)

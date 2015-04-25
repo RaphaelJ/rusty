@@ -138,12 +138,12 @@ private:
     inline void _init_mspace(tmc_alloc_t *alloc)
     {
         _mspace = shared_ptr<tmc_mspace>(new tmc_mspace, _free_mspace);
-        *_mspace = tmc_mspace_create_special(0, TMC_MSPACE_LOCKED, alloc);
+        *_mspace = tmc_mspace_create_special(0, TMC_MSPACE_SPINLOCK, alloc);
     }
 
     static void _free_mspace(tmc_mspace *mspace)
     {
-        TCP_MPIPE_DEBUG("Freeing mpace as address %zu", (size_t) *mspace); 
+        TCP_MPIPE_DEBUG("Freeing mpace starting at %zu", (size_t) *mspace);
         tmc_mspace_destroy(*mspace);
         delete mspace;
     }
