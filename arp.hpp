@@ -14,6 +14,8 @@
 
 #include "mpipe.hpp"
 
+using namespace std;
+
 namespace std {
 
 // 'std::hash<struct in_addr>' and 'std::equal_to<struct in_addr>' instances are
@@ -33,13 +35,11 @@ struct equal_to<struct in_addr> {
         const struct in_addr& a, const struct in_addr& b
     ) const
     {
-        return memcmp(&a, &b, sizeof (struct ether_addr)) == 0;
+        return memcmp(&a, &b, sizeof (struct in_addr)) == 0;
     }
 };
 
 }
-
-using namespace std;
 
 namespace tcp_mpipe {
 
@@ -48,9 +48,6 @@ typedef function<void(struct ether_addr)> arp_callback_t;
 
 struct arp_env_t {
     mpipe_env_t                                             *mpipe_env;
-
-    // Ethernet address of the mPIPE interface (in network byte order).
-    struct ether_addr                                       ether_addr;
 
     // IPv4 address this ARP instance must announce (in network byte order).
     struct in_addr                                          ipv4_addr;
@@ -76,16 +73,17 @@ void arp_init(
     arp_env_t *arp_env, mpipe_env_t *mpipe_env, struct in_addr ipv4_addr
 );
 
-// Pushes the given ARP message on the Egress queue.
-void arp_send_message(
-    arp_env_t *arp_env, unsigned short int op,
-    struct ether_addr sdr_ether, struct in_addr sdr_ipv4,
-    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
-);
-
 // Processes an ARP message wich starts at the given cursor (Ethernet payload
 // without headers).
 void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor);
+
+// Pushes the given ARP message on the egress queue.
+//
+// 'op', 'tgt_ether' and 'tgt_ipv4' must be in network byte order.
+void arp_send_message(
+    arp_env_t *arp_env, unsigned short int op,
+    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
+);
 
 // Executes the given callback function with the Ethernet address (in network
 // byte order) corresponding to the given IPv4 address (in network byte order).

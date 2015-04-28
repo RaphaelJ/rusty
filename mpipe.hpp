@@ -100,6 +100,9 @@ struct mpipe_env_t {
     gxio_mpipe_context_t    context;
     gxio_mpipe_link_t       link;
 
+    // Ethernet address of the network interface (in network byte order).
+    struct ether_addr       link_addr;
+
     // Ingres
     gxio_mpipe_iqueue_t     iqueue;
     unsigned int            notif_ring_id;
@@ -150,10 +153,6 @@ inline void mpipe_free_buffer(mpipe_env_t *mpipe_env, gxio_mpipe_bdesc_t bdesc)
 {
     gxio_mpipe_push_buffer_bdesc(&(mpipe_env->context), bdesc);
 }
-
-// Returns the hardware address of the link related to the given mPIPE
-// environment (in network byte order).
-struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env);
 
 } /* namespace tcp_mpipe */
 

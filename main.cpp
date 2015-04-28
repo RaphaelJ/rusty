@@ -49,27 +49,42 @@ int main(int argc, char **argv)
     arp_init(&arp_env, &mpipe_env, args.ipv4_addr);
 
     TCP_MPIPE_DEBUG(
-        "mPIPE driver started on interface %s (%s) with %s as IPv4",
-        args.link_name, ether_ntoa(&(arp_env.ether_addr)),
+        "mPIPE driver started on interface %s (%s) with %s as IPv4 address",
+        args.link_name, ether_ntoa(&(mpipe_env.link_addr)),
         inet_ntoa(args.ipv4_addr)
     );
 
     tile_allocator_t<int> allocator();
+
+    sleep(2);
+
+    struct in_addr dest;
+    inet_aton("10.0.2.1", &dest);
+    arp_with_ether_addr(
+        &arp_env, dest, [=](struct ether_addr addr) {
+            TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+        }
+    );
+    arp_with_ether_addr(
+        &arp_env, dest, [=](struct ether_addr addr) {
+            TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+        }
+    );
 
     while (1) {
         gxio_mpipe_idesc_t idesc;
         gxio_mpipe_iqueue_get(&(mpipe_env.iqueue), &idesc);
 
         if (gxio_mpipe_iqueue_drop_if_bad(&(mpipe_env.iqueue), &idesc)) {
-            TCP_MPIPE_DEBUG("Ethernet frame dropped");
+            TCP_MPIPE_DEBUG("invalid Ethernet frame dropped");
             continue;
         }
 
         uint16_t ether_type = gxio_mpipe_idesc_get_ethertype(&idesc);
         switch (ether_type) {
         case ETHERTYPE_ARP:
-            TCP_MPIPE_DEBUG("Received ARP Ethernet frame");
             arp_receive(&arp_env, mpipe_get_l3_cursor(&idesc));
+            // TODO : free the idesc.
             break;
         case ETHERTYPE_IP:
             TCP_MPIPE_DEBUG("Received IP Ethernet frame");
@@ -81,6 +96,12 @@ int main(int argc, char **argv)
             );
             gxio_mpipe_iqueue_drop(&(mpipe_env.iqueue), &idesc);
         }
+        
+            arp_with_ether_addr(
+        &arp_env, dest, [=](struct ether_addr addr) {
+            TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+        }
+    );
     }
 
     mpipe_close(&mpipe_env);
@@ -105,7 +126,7 @@ static bool _parse_args(int argc, char **argv, args_t *args)
 
     args->link_name = argv[1];
 
-    if (inet_pton(AF_INET, argv[2], &(args->ipv4_addr)) != 1) {
+    if (inet_aton(argv[2], &(args->ipv4_addr)) != 1) {
         fprintf(stderr, "Failed to parse the IPv4.\n");
         _print_usage(argv);
         return false;

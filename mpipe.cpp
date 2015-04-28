@@ -25,6 +25,10 @@ using namespace std;
 
 namespace tcp_mpipe {
 
+// Returns the hardware address of the link related to the given mPIPE
+// environment (in network byte order).
+static struct ether_addr _mpipe_ether_addr(gxio_mpipe_link_t *link);
+
 // Checks for errors from the GXIO API, which returns negative error codes.
 #define VERIFY_GXIO(VAL, WHAT)                                                 \
   do {                                                                         \
@@ -72,6 +76,8 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
 
         // // Enable JUMBO ethernet packets
         // gxio_mpipe_link_set_attr(link, GXIO_MPIPE_LINK_RECEIVE_JUMBO, 1);
+
+        mpipe_env->link_addr = _mpipe_ether_addr(link);
     }
 
     //
@@ -430,11 +436,9 @@ gxio_mpipe_bdesc_t mpipe_alloc_buffer(mpipe_env_t *mpipe_env, size_t size)
     DIE("No buffer is sufficiently large to hold the requested size.");
 }
 
-struct ether_addr mpipe_ether_addr(const mpipe_env_t *mpipe_env)
+static struct ether_addr _mpipe_ether_addr(gxio_mpipe_link_t *link)
 {
-    int64_t addr = gxio_mpipe_link_get_attr(
-        (gxio_mpipe_link_t *) &(mpipe_env->link), GXIO_MPIPE_LINK_MAC
-    );
+    int64_t addr = gxio_mpipe_link_get_attr(link, GXIO_MPIPE_LINK_MAC);
 
     // Address is in the 48 least-significant bits.
     assert((addr & 0xFFFFFFFFFFFF) == addr);

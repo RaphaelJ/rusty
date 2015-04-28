@@ -14,6 +14,8 @@
 
 #include <gxio/mpipe.h> // gxio_mpipe_*
 
+#include "common.hpp"
+
 using namespace std;
 
 namespace tcp_mpipe {
@@ -49,7 +51,11 @@ struct buffer_cursor_t {
     // Complexity: O(1).
     buffer_cursor_t(gxio_mpipe_idesc_t *idesc)
     {
-        gxio_mpipe_bdesc_t edesc      = gxio_mpipe_idesc_to_bdesc(idesc);
+        // gxio_mpipe_idesc_to_bdesc() seems to be broken on MDE v4.3.2.
+        // gxio_mpipe_bdesc_t edesc      = gxio_mpipe_idesc_to_bdesc(idesc);
+        gxio_mpipe_bdesc_t edesc;
+        edesc.word = idesc->words[7];
+
         size_t             total_size = gxio_mpipe_idesc_get_xfer_size(idesc);
 
         _init_with_bdesc(&edesc, total_size);

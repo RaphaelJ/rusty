@@ -21,21 +21,21 @@ namespace tcp_mpipe {
 
 #define ARP_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[ARP] " MSG, ##__VA_ARGS__)
 
-static const struct ether_addr BROADCAST_ETHER_ADDR =
-    { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
+// Number of bytes in an IPv4 address.
+static const unsigned char IP_ALEN = 4;
 
 // *_NET constants are network byte order constants.
-static const unsigned short int ETHERTYPE_IP_NET  = htons(ETHERTYPE_IP);
 static const unsigned short int ARPHRD_ETHER_NET  = htons(ARPHRD_ETHER);
 static const unsigned short int ARPOP_REQUEST_NET = htons(ARPOP_REQUEST);
 static const unsigned short int ARPOP_REPLY_NET   = htons(ARPOP_REPLY);
+static const unsigned short int ETHERTYPE_ARP_NET = htons(ETHERTYPE_ARP);
+static const unsigned short int ETHERTYPE_IP_NET  = htons(ETHERTYPE_IP);
 
 void arp_init(
     arp_env_t *arp_env, mpipe_env_t *mpipe_env, struct in_addr ipv4_addr
 )
 {
     arp_env->mpipe_env  = mpipe_env;
-    arp_env->ether_addr = mpipe_ether_addr(mpipe_env);
     arp_env->ipv4_addr  = ipv4_addr;
 }
 
@@ -83,11 +83,11 @@ void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
             );
         }
 
-        if (UNLIKELY(msg->arp_pln != 4)) {
+        if (UNLIKELY(msg->arp_pln != IP_ALEN)) {
             IGNORE_ARP_MSG(
                 "length of hardware address is not that of an IPv4 address "
                 "(received %u, IPv4 is %u)",
-                (unsigned) msg->arp_pln, (unsigned) 4
+                (unsigned) msg->arp_pln, (unsigned) IP_ALEN
             );
         }
 
@@ -98,6 +98,11 @@ void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
                           *tgt_ipv4  = (struct in_addr    *) &(msg->arp_tpa);
 
         if (msg->arp_op == ARPOP_REQUEST_NET) {
+            ARP_DEBUG(
+                "Receives an ARP request from %s (%s)", inet_ntoa(*sdr_ipv4),
+                ether_ntoa(sdr_ether)
+            );
+
             _arp_cache_update(arp_env, *sdr_ether, *sdr_ipv4);
 
             if (tgt_ipv4->s_addr == arp_env->ipv4_addr.s_addr) {
@@ -105,69 +110,22 @@ void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
                 // Sends an ARP reply with our IPv4 address to the host which
                 // sent the request.
 
-                ARP_DEBUG(
-                    "Replies to %s (%s)", inet_ntoa(*sdr_ipv4),
-                    ether_ntoa(sdr_ether)
-                );
-
                 arp_send_message(
-                    arp_env, ARPOP_REPLY_NET, arp_env->ether_addr,
-                    arp_env->ipv4_addr, *sdr_ether, *sdr_ipv4
+                    arp_env, ARPOP_REPLY_NET, *sdr_ether, *sdr_ipv4
                 );
             }
-        } else if (msg->arp_op == ARPOP_REPLY_NET)
+        } else if (msg->arp_op == ARPOP_REPLY_NET) {
+            ARP_DEBUG(
+                "Receives an ARP reply from %s (%s)", inet_ntoa(*sdr_ipv4),
+                ether_ntoa(sdr_ether)
+            );
+
             _arp_cache_update(arp_env, *sdr_ether, *sdr_ipv4);
-        else
+        } else
             IGNORE_ARP_MSG("unknown ARP opcode (%hu)", msg->arp_op);
 
         #undef IGNORE_ARP_MSG
     });
-}
-
-static inline buffer_cursor_t _arp_write_message(
-    buffer_cursor_t cursor, unsigned short int op,
-    struct ether_addr sdr_ether, struct in_addr sdr_ipv4,
-    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
-);
-
-// NOTE: inline ?
-void arp_send_message(
-    arp_env_t *arp_env, unsigned short int op,
-    struct ether_addr sdr_ether, struct in_addr sdr_ipv4,
-    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
-)
-{
-    ethernet_send_frame(
-        arp_env->mpipe_env, sizeof (struct ether_arp), sdr_ether, tgt_ether,
-        ETHERTYPE_ARP, [=](buffer_cursor_t cursor) {
-            _arp_write_message(
-                cursor, op, sdr_ether, sdr_ipv4, tgt_ether, tgt_ipv4
-            );
-        }
-    );
-}
-
-static inline buffer_cursor_t _arp_write_message(
-    buffer_cursor_t cursor, unsigned short int op,
-    struct ether_addr sdr_ether, struct in_addr sdr_ipv4,
-    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
-)
-{
-    return cursor.write_with<struct ether_arp>(
-        [=](struct ether_arp *msg) {
-            msg->arp_hrd = ARPHRD_ETHER_NET;
-            msg->arp_pro = ETHERTYPE_IP_NET;
-
-            msg->arp_hln = ETH_ALEN;
-            msg->arp_pln = 4;
-
-            *((struct ether_addr *) &(msg->arp_sha)) = sdr_ether;
-            *((struct ether_addr *) &(msg->arp_tha)) = tgt_ether;
-
-            *((struct in_addr *) &(msg->arp_spa)) = sdr_ipv4;
-            *((struct in_addr *) &(msg->arp_tpa)) = tgt_ipv4;
-        }
-    );
 }
 
 static void _arp_cache_update(
@@ -232,6 +190,71 @@ static void _arp_cache_update(
     }
 }
 
+// Writes the ARP message after the given buffer cursor.
+//
+// 'op', 'tgt_ether' and 'tgt_ipv4' must be in network byte order.
+static inline buffer_cursor_t _arp_write_message(
+    const arp_env_t *arp_env, buffer_cursor_t cursor, unsigned short int op,
+    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
+);
+
+// NOTE: inline ?
+void arp_send_message(
+    arp_env_t *arp_env, unsigned short int op,
+    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
+)
+{
+    #ifdef NDEBUG
+        if (op == ARPOP_REQUEST_NET) {
+            ARP_DEBUG(
+                "Requests for %s at %s", inet_ntoa(tgt_ipv4),
+                ether_ntoa(tgt_ether)
+            );
+        } else if (msg->arp_op == ARPOP_REPLY_NET) {
+            ARP_DEBUG(
+                "Replies to %s (%s)", inet_ntoa(tgt_ipv4), ether_ntoa(tgt_ether)
+            );
+        } else
+            DIE("Trying to send an ARP message with an invalid operation code");
+    #endif
+
+    ethernet_send_frame(
+        arp_env->mpipe_env, sizeof (struct ether_arp), tgt_ether,
+        ETHERTYPE_ARP_NET, [=](buffer_cursor_t cursor) {
+            _arp_write_message(arp_env, cursor, op, tgt_ether, tgt_ipv4);
+        }
+    );
+}
+
+static inline buffer_cursor_t _arp_write_message(
+    const arp_env_t *arp_env, buffer_cursor_t cursor, unsigned short int op,
+    struct ether_addr tgt_ether, struct in_addr tgt_ipv4
+)
+{
+    return cursor.write_with<struct ether_arp>(
+        [=](struct ether_arp *msg) {
+            msg->arp_hrd = ARPHRD_ETHER_NET;
+            msg->arp_pro = ETHERTYPE_IP_NET;
+
+            msg->arp_hln = ETH_ALEN;
+            msg->arp_pln = IP_ALEN;
+
+            msg->arp_op = op;
+
+            memcpy(
+                &(msg->arp_sha), &(arp_env->mpipe_env->link_addr),
+                sizeof (struct ether_addr)
+            );
+            memcpy(
+                &(msg->arp_spa), &(arp_env->ipv4_addr), sizeof (struct in_addr)
+            );
+
+            memcpy(&(msg->arp_tha), &tgt_ether, sizeof (struct ether_addr));
+            memcpy(&(msg->arp_tpa), &tgt_ipv4,  sizeof (struct in_addr));
+        }
+    );
+}
+
 bool arp_with_ether_addr(
     arp_env_t *arp_env, struct in_addr ipv4_addr, arp_callback_t callback
 )
@@ -263,9 +286,7 @@ bool arp_with_ether_addr(
             // unlock
 
             arp_send_message(
-                arp_env, ARPOP_REQUEST_NET,
-                arp_env->ether_addr, arp_env->ipv4_addr,
-                BROADCAST_ETHER_ADDR, ipv4_addr
+                arp_env, ARPOP_REQUEST_NET, BROADCAST_ETHER_ADDR, ipv4_addr
             );
         }
 
