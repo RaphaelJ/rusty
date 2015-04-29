@@ -15,16 +15,23 @@
 
 #include "driver/buffer.hpp"
 #include "driver/mpipe.hpp"
+#include "net/arp.hpp"
 
 using namespace std;
 
 using namespace tcp_mpipe::driver;
+using namespace tcp_mpipe::net;
 
 namespace tcp_mpipe {
 namespace net {
 namespace ethernet {
 
 extern const struct ether_addr BROADCAST_ADDR;
+
+// Processes an Ethernet frame described by the given ingress descriptor.
+void receive_frame(
+    mpipe::env_t *mpipe_env, arp::env_t *arp_env, gxio_mpipe_idesc_t *idesc
+);
 
 // Pushes the given Ethernet frame with its payload on the egress queue using
 // the given fuction to generate the payload.

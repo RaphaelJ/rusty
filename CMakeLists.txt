@@ -13,7 +13,7 @@ add_subdirectory (net)
 
 include_directories (.)
 
-add_executable (main main.cpp)
+add_executable (main    main.cpp)
 
 target_link_libraries (
     main

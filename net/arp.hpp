@@ -12,6 +12,9 @@
 #include <functional>
 #include <unordered_map>
 
+#include <net/ethernet.h>   // ether_addr
+#include <netinet/in.h>     // in_addr
+
 #include "driver/mpipe.hpp"
 
 using namespace std;

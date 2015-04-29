@@ -7,10 +7,10 @@
 #include <cstdlib>
 #include <cinttypes>
 
-#include <arpa/inet.h>      // inet_ntoa(), inet_pton()
+#include <arpa/inet.h>      // inet_aton(), inet_ntoa()
+#include <net/ethernet.h>   // ether_addr
 #include <netinet/in.h>     // in_addr
 #include <netinet/ether.h>  // ether_ntoa()
-#include <net/ethernet.h>   // ether_addr, ETHERTYPE_*
 
 // NOTE: To remove and put in mpipe.cpp
 #include <gxio/mpipe.h>     // gxio_mpipe_*, GXIO_MPIPE_*
@@ -19,6 +19,7 @@
 #include "driver/cpu.hpp"
 #include "driver/mpipe.hpp"
 #include "net/arp.hpp"
+#include "net/ethernet.hpp"
 #include "util/macros.hpp"
 
 using namespace std;
@@ -78,33 +79,7 @@ int main(int argc, char **argv)
         gxio_mpipe_idesc_t idesc;
         gxio_mpipe_iqueue_get(&(mpipe_env.iqueue), &idesc);
 
-        if (gxio_mpipe_iqueue_drop_if_bad(&(mpipe_env.iqueue), &idesc)) {
-            TCP_MPIPE_DEBUG("invalid Ethernet frame dropped");
-            continue;
-        }
-
-        uint16_t ether_type = gxio_mpipe_idesc_get_ethertype(&idesc);
-        switch (ether_type) {
-        case ETHERTYPE_ARP:
-            arp::receive_message(&arp_env, mpipe::get_l3_cursor(&idesc));
-            // TODO : free the idesc.
-            break;
-        case ETHERTYPE_IP:
-            TCP_MPIPE_DEBUG("Received IP Ethernet frame");
-            break;
-        default:
-            TCP_MPIPE_DEBUG(
-                "Received unknown Ethernet frame (Ether type: %" PRIu16 "). "
-                "Drop frame.", ether_type
-            );
-            gxio_mpipe_iqueue_drop(&(mpipe_env.iqueue), &idesc);
-        }
-
-            arp::with_ether_addr(
-                &arp_env, dest, [=](struct ether_addr addr) {
-                    TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
-                }
-            );
+        ethernet::receive_frame(&mpipe_env, &arp_env, &idesc);
     }
 
     mpipe::close(&mpipe_env);
