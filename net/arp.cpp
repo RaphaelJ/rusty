@@ -10,14 +10,21 @@
                             // ETH_ALEN, ETHERTYPE_ARP, ETHERTYPE_IP,
                             // ether_addr, ether_arp, ether_ntoa()
 
-#include "buffer.hpp"
-#include "common.hpp"
-#include "ethernet.hpp"
-#include "mpipe.hpp"
+#include "driver/buffer.hpp"
+#include "driver/mpipe.hpp"
+#include "net/ethernet.hpp"
+#include "util/macros.hpp"
 
-#include "arp.hpp"
+#include "net/arp.hpp"
+
+using namespace std;
+
+using namespace tcp_mpipe::driver;
+using namespace tcp_mpipe::net;
 
 namespace tcp_mpipe {
+namespace net {
+namespace arp {
 
 #define ARP_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[ARP] " MSG, ##__VA_ARGS__)
 
@@ -31,12 +38,10 @@ static const unsigned short int ARPOP_REPLY_NET   = htons(ARPOP_REPLY);
 static const unsigned short int ETHERTYPE_ARP_NET = htons(ETHERTYPE_ARP);
 static const unsigned short int ETHERTYPE_IP_NET  = htons(ETHERTYPE_IP);
 
-void arp_init(
-    arp_env_t *arp_env, mpipe_env_t *mpipe_env, struct in_addr ipv4_addr
-)
+void init(env_t *env, mpipe::env_t *mpipe_env, struct in_addr ipv4_addr)
 {
-    arp_env->mpipe_env  = mpipe_env;
-    arp_env->ipv4_addr  = ipv4_addr;
+    env->mpipe_env = mpipe_env;
+    env->ipv4_addr = ipv4_addr;
 }
 
 // Adds the given IPv4 to Ethernet address mapping in the cache or updates the
@@ -44,13 +49,13 @@ void arp_init(
 //
 // In case of a new address, executes pending requests callbacks linked to the
 // IPv4 address, if any.
-static void _arp_cache_update(
-    arp_env_t *arp_env, struct ether_addr ether_addr, struct in_addr ipv4_addr
+static void _cache_update(
+    env_t *env, struct ether_addr ether_addr, struct in_addr ipv4_addr
 );
 
-void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
+void receive(env_t *env, buffer::cursor_t cursor)
 {
-    cursor.read_with<struct ether_arp>([arp_env](const struct ether_arp *msg) {
+    cursor.read_with<struct ether_arp>([env](const struct ether_arp *msg) {
 
         #define IGNORE_ARP_MSG(WHY, ...)                                       \
             do {                                                               \
@@ -103,16 +108,14 @@ void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
                 ether_ntoa(sdr_ether)
             );
 
-            _arp_cache_update(arp_env, *sdr_ether, *sdr_ipv4);
+            _cache_update(env, *sdr_ether, *sdr_ipv4);
 
-            if (tgt_ipv4->s_addr == arp_env->ipv4_addr.s_addr) {
+            if (tgt_ipv4->s_addr == env->ipv4_addr.s_addr) {
                 // Someone is asking for our Ethernet address.
                 // Sends an ARP reply with our IPv4 address to the host which
                 // sent the request.
 
-                arp_send_message(
-                    arp_env, ARPOP_REPLY_NET, *sdr_ether, *sdr_ipv4
-                );
+                send_message(env, ARPOP_REPLY_NET, *sdr_ether, *sdr_ipv4);
             }
         } else if (msg->arp_op == ARPOP_REPLY_NET) {
             ARP_DEBUG(
@@ -120,7 +123,7 @@ void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
                 ether_ntoa(sdr_ether)
             );
 
-            _arp_cache_update(arp_env, *sdr_ether, *sdr_ipv4);
+            _cache_update(env, *sdr_ether, *sdr_ipv4);
         } else
             IGNORE_ARP_MSG("unknown ARP opcode (%hu)", msg->arp_op);
 
@@ -128,8 +131,8 @@ void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor)
     });
 }
 
-static void _arp_cache_update(
-    arp_env_t *arp_env, struct ether_addr ether_addr, struct in_addr ipv4_addr
+static void _cache_update(
+    env_t *env, struct ether_addr ether_addr, struct in_addr ipv4_addr
 )
 {
     // NOTE: this procedure should require an exclusive lock for addrs_cache
@@ -137,7 +140,7 @@ static void _arp_cache_update(
 
     // lock
 
-    auto p = arp_env->addrs_cache.insert({ ipv4_addr, ether_addr });
+    auto p = env->addrs_cache.insert({ ipv4_addr, ether_addr });
 
     if (!p.second) {
         // Address already in cache, replace the previous value if different.
@@ -161,9 +164,9 @@ static void _arp_cache_update(
             ether_ntoa(&ether_addr)
         );
 
-        auto it = arp_env->pending_reqs.find(ipv4_addr);
+        auto it = env->pending_reqs.find(ipv4_addr);
 
-        if (it != arp_env->pending_reqs.end()) {
+        if (it != env->pending_reqs.end()) {
             // The address has pending requests.
             //
             // As it's possible that one of these callbacks induce a new lookup
@@ -171,8 +174,8 @@ static void _arp_cache_update(
             // must first remove the pending requests entry and free the lock
             // before calling any callback.
 
-            vector<arp_callback_t> callbacks = move(it->second);
-            arp_env->pending_reqs.erase(it);
+            vector<callback_t> callbacks = move(it->second);
+            env->pending_reqs.erase(it);
 
             // unlock
 
@@ -181,7 +184,7 @@ static void _arp_cache_update(
                 inet_ntoa(ipv4_addr)
             );
 
-            for (arp_callback_t& callback : callbacks)
+            for (callback_t& callback : callbacks)
                 callback(ether_addr);
         } else {
             // No pending request.
@@ -193,14 +196,14 @@ static void _arp_cache_update(
 // Writes the ARP message after the given buffer cursor.
 //
 // 'op', 'tgt_ether' and 'tgt_ipv4' must be in network byte order.
-static inline buffer_cursor_t _arp_write_message(
-    const arp_env_t *arp_env, buffer_cursor_t cursor, unsigned short int op,
+static inline buffer::cursor_t _write_message(
+    const env_t *env, buffer::cursor_t cursor, unsigned short int op,
     struct ether_addr tgt_ether, struct in_addr tgt_ipv4
 );
 
 // NOTE: inline ?
-void arp_send_message(
-    arp_env_t *arp_env, unsigned short int op,
+void send_message(
+    env_t *env, unsigned short int op,
     struct ether_addr tgt_ether, struct in_addr tgt_ipv4
 )
 {
@@ -218,16 +221,16 @@ void arp_send_message(
             DIE("Trying to send an ARP message with an invalid operation code");
     #endif
 
-    ethernet_send_frame(
-        arp_env->mpipe_env, sizeof (struct ether_arp), tgt_ether,
-        ETHERTYPE_ARP_NET, [=](buffer_cursor_t cursor) {
-            _arp_write_message(arp_env, cursor, op, tgt_ether, tgt_ipv4);
+    ethernet::send_frame(
+        env->mpipe_env, sizeof (struct ether_arp), tgt_ether,
+        ETHERTYPE_ARP_NET, [=](buffer::cursor_t cursor) {
+            _write_message(env, cursor, op, tgt_ether, tgt_ipv4);
         }
     );
 }
 
-static inline buffer_cursor_t _arp_write_message(
-    const arp_env_t *arp_env, buffer_cursor_t cursor, unsigned short int op,
+static inline buffer::cursor_t _write_message(
+    const env_t *env, buffer::cursor_t cursor, unsigned short int op,
     struct ether_addr tgt_ether, struct in_addr tgt_ipv4
 )
 {
@@ -242,12 +245,10 @@ static inline buffer_cursor_t _arp_write_message(
             msg->arp_op = op;
 
             memcpy(
-                &(msg->arp_sha), &(arp_env->mpipe_env->link_addr),
+                &(msg->arp_sha), &(env->mpipe_env->link_addr),
                 sizeof (struct ether_addr)
             );
-            memcpy(
-                &(msg->arp_spa), &(arp_env->ipv4_addr), sizeof (struct in_addr)
-            );
+            memcpy(&(msg->arp_spa), &(env->ipv4_addr), sizeof (struct in_addr));
 
             memcpy(&(msg->arp_tha), &tgt_ether, sizeof (struct ether_addr));
             memcpy(&(msg->arp_tpa), &tgt_ipv4,  sizeof (struct in_addr));
@@ -255,21 +256,19 @@ static inline buffer_cursor_t _arp_write_message(
     );
 }
 
-bool arp_with_ether_addr(
-    arp_env_t *arp_env, struct in_addr ipv4_addr, arp_callback_t callback
-)
+bool with_ether_addr(env_t *env, struct in_addr ipv4_addr, callback_t callback)
 {
     // lock
 
-    auto it = arp_env->addrs_cache.find(ipv4_addr);
+    auto it = env->addrs_cache.find(ipv4_addr);
 
-    if (it != arp_env->addrs_cache.end()) { // Hardware address is cached.
+    if (it != env->addrs_cache.end()) { // Hardware address is cached.
         // unlock
         callback(it->second);
         return true;
     } else {                                // Hardware address is NOT cached.
-        vector<arp_callback_t> callbacks { callback };
-        auto p = arp_env->pending_reqs.emplace(make_pair(ipv4_addr, callbacks));
+        vector<callback_t> callbacks { callback };
+        auto p = env->pending_reqs.emplace(make_pair(ipv4_addr, callbacks));
 
         if (!p.second) {
             // The pending request entry already existed. A request has already
@@ -285,8 +284,8 @@ bool arp_with_ether_addr(
 
             // unlock
 
-            arp_send_message(
-                arp_env, ARPOP_REQUEST_NET, BROADCAST_ETHER_ADDR, ipv4_addr
+            send_message(
+                env, ARPOP_REQUEST_NET, ethernet::BROADCAST_ADDR, ipv4_addr
             );
         }
 
@@ -296,4 +295,4 @@ bool arp_with_ether_addr(
 
 #undef ARP_DEBUG
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::net::arp */

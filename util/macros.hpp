@@ -2,15 +2,13 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
-// Various utilities.
+// Various macros.
 //
 
-#ifndef __TCP_MPIPE_COMMON_HPP__
-#define __TCP_MPIPE_COMMON_HPP__
+#ifndef __TCP_MPIPE_UTILS_MACROS_HPP__
+#define __TCP_MPIPE_UTILS_MACROS_HPP__
 
 #include <tmc/task.h>   // tmc_task_die
-
-namespace tcp_mpipe {
 
 //
 // Macros
@@ -45,7 +43,4 @@ namespace tcp_mpipe {
 #define LIKELY(x)       __builtin_expect(!!(x), 1)
 #define UNLIKELY(x)     __builtin_expect((x), 0)
 
-
-} /* namespace tcp_mpipe */
-
-#endif /* __TCP_MPIPE_COMMON_HPP__ */
+#endif /* __TCP_MPIPE_UTILS_MACROS_HPP__ */

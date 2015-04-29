@@ -5,21 +5,23 @@
 // Defines a C++ STL allocator which wraps the TMC memory management library.
 //
 
-#ifndef __TCP_MPIPE_ALLOCATOR_HPP__
-#define __TCP_MPIPE_ALLOCATOR_HPP__
+#ifndef __TCP_MPIPE_UTILS_ALLOCATOR_HPP__
+#define __TCP_MPIPE_UTILS_ALLOCATOR_HPP__
 
 #include <memory>
 
 #include <tmc/alloc.h>      // tmc_alloc_t, tmc_alloc_*
 #include <tmc/mspace.h>     // tmc_mspace_*
 
-#include "common.hpp"
+#include "util/macros.hpp"
 
 using namespace std;
 
 namespace tcp_mpipe {
+namespace utils {
+namespace tile_allocator {
 
-// Allocator which will use the provided tmc_alloc_t configuration to allocate
+// Allocator which will use the provided 'tmc_alloc_t' configuration to allocate
 // an heap on which it will be able to allocate data.
 //
 // This can be used to specify how memory of STL containers should be cached on
@@ -28,8 +30,8 @@ namespace tcp_mpipe {
 // Multiple threads should be able to allocate/deallocate memory concurrently.
 //
 // Every allocated data will be freed when the object and all of its copies will
-// be destucted. Thus you must at least have one copy of tile_allocator_t alive
-// to be able to use allocated memories.
+// be destucted. Thus you must at least have one copy of 'tile_allocator_t'
+// alive to be able to use allocated memories.
 template <typename T>
 struct tile_allocator_t {
     typedef T value_type;
@@ -89,8 +91,8 @@ struct tile_allocator_t {
         _init_mspace(&alloc);
     }
 
-    // Combines tile_allocator_t(int home) and
-    // tile_allocator_t(size_t pagesize).
+    // Combines 'tile_allocator_t(int home)' and
+    // 'tile_allocator_t(size_t pagesize)'.
     inline tile_allocator_t(int home, size_t pagesize)
     {
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
@@ -130,8 +132,8 @@ struct tile_allocator_t {
     }
 
 private:
-    // Uses a shared_ptr to the tmc_mspace with a destructor which frees the
-    // memory space once no more tile_allocator_t are referencing it.
+    // Uses a 'shared_ptr' to the 'tmc_mspace' with a destructor which frees the
+    // memory space once no more 'tile_allocator_t' are referencing it.
 
     shared_ptr<tmc_mspace> _mspace;
 
@@ -149,6 +151,6 @@ private:
     }
 };
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::utils:: */
 
-#endif /* __TCP_MPIPE_ALLOCATOR_HPP__ */
+#endif /* __TCP_MPIPE_UTILS_ALLOCATOR_HPP__ */

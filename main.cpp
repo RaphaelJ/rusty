@@ -15,14 +15,17 @@
 // NOTE: To remove and put in mpipe.cpp
 #include <gxio/mpipe.h>     // gxio_mpipe_*, GXIO_MPIPE_*
 
-#include "allocator.hpp"
-#include "arp.hpp"
-#include "common.hpp"
-#include "cpu.hpp"
-#include "mpipe.hpp"
+#include "driver/allocator.hpp"
+#include "driver/cpu.hpp"
+#include "driver/mpipe.hpp"
+#include "net/arp.hpp"
+#include "util/macros.hpp"
 
 using namespace std;
-using namespace tcp_mpipe;
+
+using namespace tcp_mpipe::driver;
+using namespace tcp_mpipe::net;
+using namespace tcp_mpipe::utils;
 
 // Parsed CLI arguments.
 struct args_t {
@@ -40,13 +43,13 @@ int main(int argc, char **argv)
     if (!_parse_args(argc, argv, &args))
         return EXIT_FAILURE;
 
-    bind_to_dataplane(0);
+    cpu::bind_to_dataplane(0);
 
-    mpipe_env_t mpipe_env;
-    mpipe_init(&mpipe_env, args.link_name);
+    mpipe::env_t mpipe_env;
+    mpipe::init(&mpipe_env, args.link_name);
 
-    arp_env_t arp_env;
-    arp_init(&arp_env, &mpipe_env, args.ipv4_addr);
+    arp::env_t arp_env;
+    arp::init(&arp_env, &mpipe_env, args.ipv4_addr);
 
     TCP_MPIPE_DEBUG(
         "mPIPE driver started on interface %s (%s) with %s as IPv4 address",
@@ -54,18 +57,18 @@ int main(int argc, char **argv)
         inet_ntoa(args.ipv4_addr)
     );
 
-    tile_allocator_t<int> allocator();
+    tile_allocator::tile_allocator_t<int> allocator();
 
     sleep(2);
 
     struct in_addr dest;
     inet_aton("10.0.2.1", &dest);
-    arp_with_ether_addr(
+    arp::with_ether_addr(
         &arp_env, dest, [=](struct ether_addr addr) {
             TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
         }
     );
-    arp_with_ether_addr(
+    arp::with_ether_addr(
         &arp_env, dest, [=](struct ether_addr addr) {
             TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
         }
@@ -83,7 +86,7 @@ int main(int argc, char **argv)
         uint16_t ether_type = gxio_mpipe_idesc_get_ethertype(&idesc);
         switch (ether_type) {
         case ETHERTYPE_ARP:
-            arp_receive(&arp_env, mpipe_get_l3_cursor(&idesc));
+            arp::receive(&arp_env, mpipe::get_l3_cursor(&idesc));
             // TODO : free the idesc.
             break;
         case ETHERTYPE_IP:
@@ -96,15 +99,15 @@ int main(int argc, char **argv)
             );
             gxio_mpipe_iqueue_drop(&(mpipe_env.iqueue), &idesc);
         }
-        
-            arp_with_ether_addr(
-        &arp_env, dest, [=](struct ether_addr addr) {
-            TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
-        }
-    );
+
+            arp::with_ether_addr(
+                &arp_env, dest, [=](struct ether_addr addr) {
+                    TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+                }
+            );
     }
 
-    mpipe_close(&mpipe_env);
+    mpipe::close(&mpipe_env);
 
     return EXIT_SUCCESS;
 }

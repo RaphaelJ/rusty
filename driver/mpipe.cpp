@@ -17,17 +17,19 @@
 #include <tmc/alloc.h>      // tmc_alloc_map, tmc_alloc_set_home,
                             // tmc_alloc_set_pagesize.
 
-#include "common.hpp"
+#include "util/macros.hpp"
 
-#include "mpipe.hpp"
+#include "driver/mpipe.hpp"
 
 using namespace std;
 
 namespace tcp_mpipe {
+namespace driver {
+namespace mpipe {
 
 // Returns the hardware address of the link related to the given mPIPE
 // environment (in network byte order).
-static struct ether_addr _mpipe_ether_addr(gxio_mpipe_link_t *link);
+static struct ether_addr _ether_addr(gxio_mpipe_link_t *link);
 
 // Checks for errors from the GXIO API, which returns negative error codes.
 #define VERIFY_GXIO(VAL, WHAT)                                                 \
@@ -49,11 +51,11 @@ static struct ether_addr _mpipe_ether_addr(gxio_mpipe_link_t *link);
 // mpipe_env_t so the structure can be efficiently allocated by the caller
 // (i.e. on the Tile's cache of the tile which uses the iqueue and equeue
 // wrappers).
-void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
+void init(env_t *env, const char *link_name)
 {
     int result;
 
-    gxio_mpipe_context_t * const context = &(mpipe_env->context);
+    gxio_mpipe_context_t * const context = &(env->context);
 
     //
     // mPIPE driver.
@@ -62,7 +64,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
     //
 
     {
-        gxio_mpipe_link_t * const link = &(mpipe_env->link);
+        gxio_mpipe_link_t * const link = &(env->link);
 
         result = gxio_mpipe_link_instance(link_name);
         VERIFY_GXIO(result, "gxio_mpipe_link_instance()");
@@ -77,7 +79,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
         // // Enable JUMBO ethernet packets
         // gxio_mpipe_link_set_attr(link, GXIO_MPIPE_LINK_RECEIVE_JUMBO, 1);
 
-        mpipe_env->link_addr = _mpipe_ether_addr(link);
+        env->link_addr = _ether_addr(link);
     }
 
     //
@@ -97,7 +99,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
         // able to process packets in parallel.
         result = gxio_mpipe_alloc_notif_rings(context, 1 /* count */, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_notif_rings()");
-        mpipe_env->notif_ring_id = result;
+        env->notif_ring_id = result;
 
         // Allocates the NotifRing.
         // The NotifRing must be 4 KB aligned and must reside on a single
@@ -124,21 +126,19 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
-        mpipe_env->notif_ring_mem = (char *) tmc_alloc_map(
-            &alloc, ring_size
-        );
-        if (mpipe_env->notif_ring_mem == NULL)
+        env->notif_ring_mem = (char *) tmc_alloc_map(&alloc, ring_size);
+        if (env->notif_ring_mem == NULL)
             DIE("tmc_alloc_map()");
 
         // ring is 4 KB aligned.
-        assert(((intptr_t) mpipe_env->notif_ring_mem & 0xFFF) == 0);
+        assert(((intptr_t) env->notif_ring_mem & 0xFFF) == 0);
 
         // Initializes an iqueue which uses the ring memory and the mPIPE
         // context.
 
         result = gxio_mpipe_iqueue_init(
-            &(mpipe_env->iqueue), context, mpipe_env->notif_ring_id,
-            mpipe_env->notif_ring_mem, ring_size, 0
+            &(env->iqueue), context, env->notif_ring_id,
+            env->notif_ring_mem, ring_size, 0
         );
         VERIFY_GXIO(result, "gxio_mpipe_iqueue_init()");
 
@@ -150,21 +150,21 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
 
         result = gxio_mpipe_alloc_notif_groups(context, 1 /* count */, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_notif_groups()");
-        mpipe_env->notif_group_id = result;
+        env->notif_group_id = result;
 
         // Allocates a single bucket. Each paquet will go to this bucket and
         // will be mapped to the single NotigGroup.
 
         result = gxio_mpipe_alloc_buckets(context, 1 /* count */, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_buckets()");
-        mpipe_env->bucket_id = result;
+        env->bucket_id = result;
 
         // Initialize the NotifGroup and its buckets. Assigns the single
         // NotifRing to the group.
 
         result = gxio_mpipe_init_notif_group_and_buckets(
-            context, mpipe_env->notif_group_id, mpipe_env->notif_ring_id,
-            1 /* ring count */, mpipe_env->bucket_id, 1 /* bucket count */,
+            context, env->notif_group_id, env->notif_ring_id,
+            1 /* ring count */, env->bucket_id, 1 /* bucket count */,
             GXIO_MPIPE_BUCKET_ROUND_ROBIN /* load-balancing mode */
         );
         VERIFY_GXIO(result, "gxio_mpipe_init_notif_group_and_buckets()");
@@ -183,7 +183,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
         // concurrently on the same context/link.
         result = gxio_mpipe_alloc_edma_rings(context, 1 /* count */, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_edma_rings");
-        mpipe_env->edma_ring_id = result;
+        env->edma_ring_id = result;
 
         size_t ring_size = EQUEUE_ENTRIES * sizeof(gxio_mpipe_edesc_t);
 
@@ -208,23 +208,21 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
-        mpipe_env->edma_ring_mem = (char *) tmc_alloc_map(
-            &alloc, ring_size
-        );
-        if (mpipe_env->edma_ring_mem == NULL)
+        env->edma_ring_mem = (char *) tmc_alloc_map(&alloc, ring_size);
+        if (env->edma_ring_mem == NULL)
             DIE("tmc_alloc_map()");
 
         // ring is 1 KB aligned.
-        assert(((intptr_t) mpipe_env->edma_ring_mem & 0x3FF) == 0);
+        assert(((intptr_t) env->edma_ring_mem & 0x3FF) == 0);
 
         // Initializes an equeue which uses the eDMA ring memory and the channel
         // associated with the context's link.
 
-        int channel = gxio_mpipe_link_channel(&(mpipe_env->link));
+        int channel = gxio_mpipe_link_channel(&(env->link));
 
         result = gxio_mpipe_equeue_init(
-            &(mpipe_env->equeue), context, mpipe_env->edma_ring_id,
-            channel, mpipe_env->edma_ring_mem, ring_size, 0
+            &(env->equeue), context, env->edma_ring_id,
+            channel, env->edma_ring_mem, ring_size, 0
         );
         VERIFY_GXIO(result, "gxio_gxio_equeue_init()");
     }
@@ -248,7 +246,7 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
         VERIFY_GXIO(result, "gxio_mpipe_alloc_buffer_stacks()");
         unsigned int stack_id = result;
 
-        mpipe_env->buffer_stacks.reserve(n_stacks);
+        env->buffer_stacks.reserve(n_stacks);
 
         // Allocates, initializes and registers the memory for each stacks.
         for (const buffer_stack_info_t& stack_info : BUFFERS_STACKS) {
@@ -356,15 +354,15 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
                 mem, mem + stack_size, total_size
             };
 
-            mpipe_env->buffer_stacks.push_back(buffer_stack);
+            env->buffer_stacks.push_back(buffer_stack);
 
             stack_id++;
         }
 
-        // Sorts 'mpipe_env->buffer_stacks' by increasing buffer sizes.
+        // Sorts 'env->buffer_stacks' by increasing buffer sizes.
 
         sort(
-            mpipe_env->buffer_stacks.begin(), mpipe_env->buffer_stacks.end(),
+            env->buffer_stacks.begin(), env->buffer_stacks.end(),
             [](const buffer_stack_t& a, const buffer_stack_t& b) {
                 return a.info->size < b.info->size;
             }
@@ -381,11 +379,11 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
     //
 
     {
-        gxio_mpipe_rules_t *rules = &(mpipe_env->rules);
+        gxio_mpipe_rules_t *rules = &(env->rules);
         gxio_mpipe_rules_init(rules, context);
 
         result = gxio_mpipe_rules_begin(
-            rules, mpipe_env->bucket_id, 1 /* bucket count */, NULL
+            rules, env->bucket_id, 1 /* bucket count */, NULL
         );
         VERIFY_GXIO(result, "gxio_mpipe_rules_begin()");
 
@@ -394,49 +392,49 @@ void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name)
     }
 }
 
-void mpipe_close(mpipe_env_t *mpipe_env)
+void close(env_t *env)
 {
     int result;
 
     // Releases the mPIPE context
 
-    result = gxio_mpipe_link_close(&(mpipe_env->link));
+    result = gxio_mpipe_link_close(&(env->link));
     VERIFY_GXIO(result, "gxio_mpipe_link_close(()");
 
-    result = gxio_mpipe_destroy(&(mpipe_env->context));
+    result = gxio_mpipe_destroy(&(env->context));
     VERIFY_GXIO(result, "gxio_mpipe_destroy()");
 
     // Releases rings memory
 
     size_t notif_ring_size = IQUEUE_ENTRIES * sizeof(gxio_mpipe_idesc_t);
-    result = tmc_alloc_unmap(mpipe_env->notif_ring_mem, notif_ring_size );
+    result = tmc_alloc_unmap(env->notif_ring_mem, notif_ring_size );
     VERIFY_ERRNO(result, "tmc_alloc_unmap()");
 
     size_t edma_ring_size = EQUEUE_ENTRIES * sizeof(gxio_mpipe_edesc_t);
-    result = tmc_alloc_unmap(mpipe_env->edma_ring_mem, edma_ring_size);
+    result = tmc_alloc_unmap(env->edma_ring_mem, edma_ring_size);
     VERIFY_ERRNO(result, "tmc_alloc_unmap()");
 
     // Releases buffers memory
 
-    for (const buffer_stack_t& buffer_stack : mpipe_env->buffer_stacks) {
+    for (const buffer_stack_t& buffer_stack : env->buffer_stacks) {
         result = tmc_alloc_unmap(buffer_stack.mem, buffer_stack.mem_size);
         VERIFY_ERRNO(result, "tmc_alloc_unmap()");
     }
 }
 
-gxio_mpipe_bdesc_t mpipe_alloc_buffer(mpipe_env_t *mpipe_env, size_t size)
+gxio_mpipe_bdesc_t alloc_buffer(env_t *env, size_t size)
 {
     // Finds the first buffer size large enough to hold the requested buffer.
-    for (const buffer_stack_t &stack : mpipe_env->buffer_stacks) {
+    for (const buffer_stack_t &stack : env->buffer_stacks) {
         if (stack.buffer_size >= size)
-            return gxio_mpipe_pop_buffer_bdesc(&(mpipe_env->context), stack.id);
+            return gxio_mpipe_pop_buffer_bdesc(&(env->context), stack.id);
     }
 
     // TODO: build a chained buffer if possible.
     DIE("No buffer is sufficiently large to hold the requested size.");
 }
 
-static struct ether_addr _mpipe_ether_addr(gxio_mpipe_link_t *link)
+static struct ether_addr _ether_addr(gxio_mpipe_link_t *link)
 {
     int64_t addr = gxio_mpipe_link_get_attr(link, GXIO_MPIPE_LINK_MAC);
 
@@ -454,6 +452,6 @@ static struct ether_addr _mpipe_ether_addr(gxio_mpipe_link_t *link)
     };
 }
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe */
 
 #undef VERIFY_GXIO

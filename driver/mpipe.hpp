@@ -5,19 +5,21 @@
 // Wrappers for mPIPE functions. Makes initialization of the driver easier.
 //
 
-#ifndef __TCP_MPIPE_MPIPE_HPP__
-#define __TCP_MPIPE_MPIPE_HPP__
+#ifndef __TCP_MPIPE_DRIVER_MPIPE_HPP__
+#define __TCP_MPIPE_DRIVER_MPIPE_HPP__
 
 #include <array>
 #include <vector>
 
 #include <gxio/mpipe.h> // gxio_mpipe_*, GXIO_MPIPE_*
 
-#include "buffer.hpp"
+#include "driver/buffer.hpp"
 
 using namespace std;
 
 namespace tcp_mpipe {
+namespace driver {
+namespace mpipe {
 
 // -----------------------------------------------------------------------------
 
@@ -95,7 +97,7 @@ struct buffer_stack_t {
 //
 // NOTE: should probably be allocated on the Tile's cache which uses the iqueue
 // and the equeue wrappers.
-struct mpipe_env_t {
+struct env_t {
     // Driver
     gxio_mpipe_context_t    context;
     gxio_mpipe_link_t       link;
@@ -134,26 +136,26 @@ struct mpipe_env_t {
 // Starts the mPIPE driver, allocates a NotifRing and its iqueue wrapper, an
 // eDMA ring with its equeue wrapper and a set of buffer stacks with their
 // buffers.
-void mpipe_init(mpipe_env_t *mpipe_env, const char *link_name);
+void init(env_t *mpipe_env, const char *link_name);
 
 // Releases mPIPE resources referenced by the given mpipe_env_t.
-void mpipe_close(mpipe_env_t *mpipe_env);
+void close(env_t *mpipe_env);
 
 // Returns a network layer (L3) packet cursor for the given 'idesc'.
-inline buffer_cursor_t mpipe_get_l3_cursor(gxio_mpipe_idesc_t *idesc)
+inline buffer::cursor_t get_l3_cursor(gxio_mpipe_idesc_t *idesc)
 {
-    return buffer_cursor_t(idesc).drop(gxio_mpipe_idesc_get_l3_offset(idesc));
+    return buffer::cursor_t(idesc).drop(gxio_mpipe_idesc_get_l3_offset(idesc));
 }
 
 // Allocates a buffer from the smallest stack able to hold the requested size.
-gxio_mpipe_bdesc_t mpipe_alloc_buffer(mpipe_env_t *mpipe_env, size_t size);
+gxio_mpipe_bdesc_t alloc_buffer(env_t *env, size_t size);
 
 // Frees the buffer to its original stack.
-inline void mpipe_free_buffer(mpipe_env_t *mpipe_env, gxio_mpipe_bdesc_t bdesc)
+inline void free_buffer(env_t *env, gxio_mpipe_bdesc_t bdesc)
 {
-    gxio_mpipe_push_buffer_bdesc(&(mpipe_env->context), bdesc);
+    gxio_mpipe_push_buffer_bdesc(&(env->context), bdesc);
 }
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::driver::mpipe */
 
-#endif /* __TCP_MPIPE_MPIPE_HPP__ */
+#endif /* __TCP_MPIPE_DRIVER_MPIPE_HPP__ */

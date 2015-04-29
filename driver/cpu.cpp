@@ -12,13 +12,15 @@
 #include <tmc/cpus.h>       // tmc_cpus_*
 #include <sys/dataplane.h>  // set_dataplane
 
-#include "cpu.hpp"
+#include "util/macros.hpp"
 
-#include "common.hpp"
+#include "driver/cpu.hpp"
 
 using namespace std;
 
 namespace tcp_mpipe {
+namespace driver {
+namespace cpu {
 
 void bind_to_dataplane(unsigned int n)
 {
@@ -44,11 +46,11 @@ void bind_to_dataplane(unsigned int n)
     VERIFY_ERRNO(result, "tmc_cpus_set_my_cpu()");
 
     #ifdef DEBUG_DATAPLANE
-    // Put dataplane tiles in "debug" mode. Interrupts other than page faults
-    // will generate a kernel stacktrace.
-    result = set_dataplane(DP_DEBUG);
-    VERIFY_ERRNO(result, "set_dataplane()");
+        // Put dataplane tiles in "debug" mode. Interrupts other than page
+        // faults will generate a kernel stacktrace.
+        result = set_dataplane(DP_DEBUG);
+        VERIFY_ERRNO(result, "set_dataplane()");
     #endif
 }
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::driver::cpu */

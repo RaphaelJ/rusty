@@ -5,16 +5,18 @@
 // Manages ARP requests and responses.
 //
 
-#ifndef __TCP_MPIPE_ARP_HPP__
-#define __TCP_MPIPE_ARP_HPP__
+#ifndef __TCP_MPIPE_NET_ARP_HPP__
+#define __TCP_MPIPE_NET_ARP_HPP__
 
 #include <cstring>
 #include <functional>
 #include <unordered_map>
 
-#include "mpipe.hpp"
+#include "driver/mpipe.hpp"
 
 using namespace std;
+
+using namespace tcp_mpipe::driver;
 
 namespace std {
 
@@ -42,12 +44,14 @@ struct equal_to<struct in_addr> {
 }
 
 namespace tcp_mpipe {
+namespace net {
+namespace arp {
 
-// Callback used in the call of 'arp_with_ether_addr()'.
-typedef function<void(struct ether_addr)> arp_callback_t;
+// Callback used in the call of 'with_ether_addr()'.
+typedef function<void(struct ether_addr)> callback_t;
 
-struct arp_env_t {
-    mpipe_env_t                                             *mpipe_env;
+struct env_t {
+    mpipe::env_t                                            *mpipe_env;
 
     // IPv4 address this ARP instance must announce (in network byte order).
     struct in_addr                                          ipv4_addr;
@@ -66,22 +70,20 @@ struct arp_env_t {
     //
     // The set of pending IPv4 addresses is disjoint with the set of addresses
     // in 'addrs_cache'.
-    unordered_map<struct in_addr, vector<arp_callback_t>>   pending_reqs;
+    unordered_map<struct in_addr, vector<callback_t>>   pending_reqs;
 };
 
-void arp_init(
-    arp_env_t *arp_env, mpipe_env_t *mpipe_env, struct in_addr ipv4_addr
-);
+void init(env_t *arp_env, mpipe::env_t *mpipe_env, struct in_addr ipv4_addr);
 
 // Processes an ARP message wich starts at the given cursor (Ethernet payload
 // without headers).
-void arp_receive(arp_env_t *arp_env, buffer_cursor_t cursor);
+void receive(env_t *env, buffer::cursor_t cursor);
 
 // Pushes the given ARP message on the egress queue.
 //
 // 'op', 'tgt_ether' and 'tgt_ipv4' must be in network byte order.
-void arp_send_message(
-    arp_env_t *arp_env, unsigned short int op,
+void send_message(
+    env_t *env, unsigned short int op,
     struct ether_addr tgt_ether, struct in_addr tgt_ipv4
 );
 
@@ -100,17 +102,15 @@ void arp_send_message(
 //
 // Example:
 //
-//      arp_with_ether_addr(arp_env, ipv4_addr, [=](auto ether_addr) {
+//      with_ether_addr(arp_env, ipv4_addr, [=](auto ether_addr) {
 //          printf(
 //              "%s hardware address is %s\n", inet_ntoa(ipv4_addr),
 //              ether_ntoa(ether_addr)
 //          );
 //      });
 //
-bool arp_with_ether_addr(
-    arp_env_t *arp_env, struct in_addr ipv4_addr, arp_callback_t callback
-);
+bool with_ether_addr(env_t *env, struct in_addr ipv4_addr, callback_t callback);
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::net::arp */
 
-#endif /* __TCP_MPIPE_ARP_HPP__ */
+#endif /* __TCP_MPIPE_NET_ARP_HPP__ */

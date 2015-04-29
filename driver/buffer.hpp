@@ -5,8 +5,8 @@
 // Provides an higher level interface to mPIPE buffers.
 //
 
-#ifndef __TCP_MPIPE_BUFFER_HPP__
-#define __TCP_MPIPE_BUFFER_HPP__
+#ifndef __TCP_MPIPE_DRIVERS_BUFFER_HPP__
+#define __TCP_MPIPE_DRIVERS_BUFFER_HPP__
 
 #include <cassert>
 #include <cstring>
@@ -14,11 +14,13 @@
 
 #include <gxio/mpipe.h> // gxio_mpipe_*
 
-#include "common.hpp"
+#include "util/macros.hpp"
 
 using namespace std;
 
 namespace tcp_mpipe {
+namespace driver {
+namespace buffer {
 
 // Structure which can be used as an iterator to read and write into an mPIPE
 // (possibly chained) buffer.
@@ -28,7 +30,7 @@ namespace tcp_mpipe {
 // modified. This makes it easier to use (you can chain methods, e.g.
 // 'cursor.read(&a).drop(10).read(&b);') and backtracking is just a matter of
 // reusing an old cursor.
-struct buffer_cursor_t {
+struct cursor_t {
 
     // A cursor state is represented by the next byte to read/write in the
     // current buffer, the remaining bytes in this buffer and a reference to the
@@ -40,7 +42,7 @@ struct buffer_cursor_t {
     // 'read_in_place()' and 'write_in_place()' implementations easier.
 
     // State of the cursor at the end of the buffer chain.
-    static const buffer_cursor_t EMPTY;
+    static const cursor_t EMPTY;
 
     char                *current;       // Next byte to read/write.
     size_t              current_size;
@@ -49,20 +51,20 @@ struct buffer_cursor_t {
     size_t              next_size;      // Remaining data in following buffers.
 
     // Complexity: O(1).
-    buffer_cursor_t(gxio_mpipe_idesc_t *idesc)
+    cursor_t(gxio_mpipe_idesc_t *idesc)
     {
         // gxio_mpipe_idesc_to_bdesc() seems to be broken on MDE v4.3.2.
         // gxio_mpipe_bdesc_t edesc      = gxio_mpipe_idesc_to_bdesc(idesc);
         gxio_mpipe_bdesc_t edesc;
         edesc.word = idesc->words[7];
 
-        size_t             total_size = gxio_mpipe_idesc_get_xfer_size(idesc);
+        size_t total_size = gxio_mpipe_idesc_get_xfer_size(idesc);
 
         _init_with_bdesc(&edesc, total_size);
     }
 
     // Complexity: O(1).
-    buffer_cursor_t(gxio_mpipe_bdesc_t *bdesc, size_t total_size)
+    cursor_t(gxio_mpipe_bdesc_t *bdesc, size_t total_size)
     {
         _init_with_bdesc(bdesc, total_size);
     }
@@ -78,7 +80,7 @@ struct buffer_cursor_t {
     // True if there is nothing more to read.
     //
     // Complexity: O(1).
-    inline bool is_empty(buffer_cursor_t cursor) const
+    inline bool is_empty(cursor_t cursor) const
     {
         if (current_size == 0) {
             assert(next_size == 0);
@@ -90,24 +92,24 @@ struct buffer_cursor_t {
     // Returns a new cursor which references the 'n' first bytes of the cursor.
     //
     // Complexity: O(1).
-    inline buffer_cursor_t take(size_t n) const
+    inline cursor_t take(size_t n) const
     {
         if (n <= current_size)
-            return buffer_cursor_t(current, n, nullptr, 0 );
+            return cursor_t(current, n, nullptr, 0 );
         else
-            return buffer_cursor_t(current, current_size, next, next_size - n);
+            return cursor_t(current, current_size, next, next_size - n);
     }
 
     // Returns a new cursor which references 'n' bytes after the cursor.
     // Returns an empty cursor if the 'n' is larger than 'size()'.
     //
     // Complexity: O(n).
-    inline buffer_cursor_t drop(size_t n) const
+    inline cursor_t drop(size_t n) const
     {
         if (n >= size())
             return EMPTY;
         else {
-            buffer_cursor_t cursor = *this;
+            cursor_t cursor = *this;
             while (n >= cursor.current_size) {
                 n -= cursor.current_size;
                 cursor = cursor._next_buffer();
@@ -124,7 +126,7 @@ struct buffer_cursor_t {
     //
     // Complexity: O(n).
     template <typename T>
-    inline buffer_cursor_t drop() const
+    inline cursor_t drop() const
     {
         return drop(sizeof (T));
     }
@@ -133,7 +135,7 @@ struct buffer_cursor_t {
     //
     // Complexity: O(n).
     template <typename T>
-    inline buffer_cursor_t drop(size_t n) const
+    inline cursor_t drop(size_t n) const
     {
         return drop(sizeof (T) * n);
     }
@@ -156,13 +158,13 @@ struct buffer_cursor_t {
     //
     // Complexity: O(n) where 'n' is the number of bytes to read.
     template <typename T>
-    inline buffer_cursor_t read(T *data) const
+    inline cursor_t read(T *data) const
     {
         assert(can<T>());
 
-        char            *data_char  = (char *) data;
-        buffer_cursor_t cursor      = *this;
-        size_t          to_read     = sizeof (T);
+        char        *data_char  = (char *) data;
+        cursor_t    cursor      = *this;
+        size_t      to_read     = sizeof (T);
 
         while (to_read >= cursor.current_size) {
             memcpy(data_char, cursor.current, cursor.current_size);
@@ -172,7 +174,7 @@ struct buffer_cursor_t {
 
         if (to_read > 0) {
             memcpy(data_char, cursor.current, to_read);
-            cursor = buffer_cursor_t( // == cursor.drop(to_read)
+            cursor = cursor_t( // == cursor.drop(to_read)
                 cursor.current + to_read, cursor.current_size - sizeof (T),
                 cursor.next, cursor.next_size
             );
@@ -189,13 +191,13 @@ struct buffer_cursor_t {
     //
     // Complexity: O(n) where 'n' is the number of bytes to read.
     template <typename T>
-    inline buffer_cursor_t write(const T *data) const
+    inline cursor_t write(const T *data) const
     {
         assert(can<T>());
 
-        const char          *data_char = (const char *) data;
-        buffer_cursor_t     cursor     = *this;
-        size_t              to_write   = sizeof (T);
+        const char  *data_char = (const char *) data;
+        cursor_t    cursor     = *this;
+        size_t      to_write   = sizeof (T);
 
         while (to_write >= cursor.current_size) {
             memcpy(cursor.current, data_char, cursor.current_size);
@@ -205,7 +207,7 @@ struct buffer_cursor_t {
 
         if (to_write > 0) {
             memcpy(cursor.current, data_char, to_write);
-            cursor = buffer_cursor_t( // == cursor.drop(to_write)
+            cursor = cursor_t( // == cursor.drop(to_write)
                 cursor.current + to_write, cursor.current_size - sizeof (T),
                 cursor.next, cursor.next_size
             );
@@ -232,13 +234,13 @@ struct buffer_cursor_t {
     //
     // Complexity: O(1).
     template <typename T>
-    inline buffer_cursor_t in_place(T **data)
+    inline cursor_t in_place(T **data)
     {
         assert(can_in_place<T>());
 
         *data = (T *) current;
 
-        return buffer_cursor_t( // == this->drop(sizeof (T))
+        return cursor_t( // == this->drop(sizeof (T))
             this->current + sizeof (T), this->current_size - sizeof (T),
             this->next,                 this->next_size
         );
@@ -252,16 +254,16 @@ struct buffer_cursor_t {
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to read.
     template <typename T>
-    inline buffer_cursor_t read_with(function<void(const T *)> f)
+    inline cursor_t read_with(function<void(const T *)> f)
     {
         if (can_in_place<T>()) {
             T *p;
-            buffer_cursor_t cursor = in_place<T>(&p);
+            cursor_t cursor = in_place<T>(&p);
             f(p);
             return cursor;
         } else {
             T data;
-            buffer_cursor_t cursor = read<T>(&data);
+            cursor_t cursor = read<T>(&data);
             f(&data);
             return cursor;
         }
@@ -277,11 +279,11 @@ struct buffer_cursor_t {
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to write.
     template <typename T>
-    inline buffer_cursor_t write_with(function<void(T *)> f)
+    inline cursor_t write_with(function<void(T *)> f)
     {
         if (can_in_place<T>()) {
             T *p;
-            buffer_cursor_t cursor = in_place<T>(&p);
+            cursor_t cursor = in_place<T>(&p);
             f(p);
             return cursor;
         } else {
@@ -292,7 +294,7 @@ struct buffer_cursor_t {
     }
 
 private:
-    buffer_cursor_t(
+    cursor_t(
         char *_current,   size_t _current_size,
         gxio_mpipe_bdesc_t *_next, size_t _next_size
     ) : current(_current), current_size(_current_size),
@@ -306,12 +308,12 @@ private:
     // Skips to the next buffer descriptor.
     //
     // Complexity: O(1).
-    inline buffer_cursor_t _next_buffer(void) const
+    inline cursor_t _next_buffer(void) const
     {
-        return buffer_cursor_t(next, next_size);
+        return cursor_t(next, next_size);
     }
 };
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::driver:buffer */
 
-#endif /* __TCP_MPIPE_BUFFER_HPP__ */
+#endif /* __TCP_MPIPE_DRIVERS_BUFFER_HPP__ */

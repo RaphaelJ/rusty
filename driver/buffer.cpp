@@ -9,15 +9,17 @@
 
 #include <gxio/mpipe.h> // MPIPE_EDMA_DESC_*
 
-#include "common.hpp"
+#include "util/macros.hpp"
 
-#include "buffer.hpp"
+#include "driver/buffer.hpp"
 
 namespace tcp_mpipe {
+namespace driver {
+namespace buffer {
 
-const buffer_cursor_t buffer_cursor_t::EMPTY = { nullptr, 0, nullptr, 0 };
+const cursor_t cursor_t::EMPTY = { nullptr, 0, nullptr, 0 };
 
-void buffer_cursor_t::_init_with_bdesc(
+void cursor_t::_init_with_bdesc(
     const gxio_mpipe_bdesc_t *bdesc, size_t total_size
 )
 {
@@ -71,4 +73,4 @@ void buffer_cursor_t::_init_with_bdesc(
     };
 }
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::driver::buffer */

@@ -5,8 +5,8 @@
 // Provides functions to create and send Ethernet frames.
 //
 
-#ifndef __TCP_MPIPE_ETHERNET_HPP__
-#define __TCP_MPIPE_ETHERNET_HPP__
+#ifndef __TCP_MPIPE_NET_ETHERNET_HPP__
+#define __TCP_MPIPE_NET_ETHERNET_HPP__
 
 #include <cinttypes>
 #include <cstring>
@@ -16,35 +16,39 @@
 
 #include <gxio/mpipe.h>     // gxio_mpipe_*
 
-#include "buffer.hpp"
-#include "mpipe.hpp"
+#include "driver/buffer.hpp"
+#include "driver/mpipe.hpp"
+#include "util/macros.hpp"
 
 using namespace std;
 
+using namespace tcp_mpipe::driver;
+
 namespace tcp_mpipe {
+namespace net {
+namespace ethernet {
 
 #define ETH_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[ETH] " MSG, ##__VA_ARGS__)
 
-static const struct ether_addr BROADCAST_ETHER_ADDR =
+static const struct ether_addr BROADCAST_ADDR =
     { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
-
 
 // Writes the Ethernet header after the given buffer cursor.
 //
 // 'dst' and 'ether_type' must be in network byte order.
-static buffer_cursor_t _ethernet_write_header(
-    const mpipe_env_t *mpipe_env, buffer_cursor_t cursor, struct ether_addr dst,
-    uint16_t ether_type
+static buffer::cursor_t _write_header(
+    const mpipe::env_t *mpipe_env, buffer::cursor_t cursor,
+    struct ether_addr dst, uint16_t ether_type
 );
 
 // Pushes the given Ethernet frame with its payload on the egress queue using
 // the given fuction to generate the payload.
 //
 // 'dst' and 'ether_type' must be in network byte order.
-inline void ethernet_send_frame(
-    mpipe_env_t *mpipe_env, size_t payload_size,
+inline void send_frame(
+    mpipe::env_t *mpipe_env, size_t payload_size,
     ether_addr dst, uint16_t ether_type,
-    function<void(buffer_cursor_t)> payload_writer
+    function<void(buffer::cursor_t)> payload_writer
 )
 {
     size_t headers_size = sizeof (ether_header),
@@ -57,10 +61,10 @@ inline void ethernet_send_frame(
 
     // Writes the header and the payload.
 
-    gxio_mpipe_bdesc_t bdesc = mpipe_alloc_buffer(mpipe_env, frame_size);
-    buffer_cursor_t cursor = buffer_cursor_t(&bdesc, frame_size);
+    gxio_mpipe_bdesc_t bdesc = mpipe::alloc_buffer(mpipe_env, frame_size);
+    buffer::cursor_t cursor = buffer::cursor_t(&bdesc, frame_size);
 
-    cursor = _ethernet_write_header(mpipe_env, cursor, dst, ether_type);
+    cursor = _write_header(mpipe_env, cursor, dst, ether_type);
     payload_writer(cursor);
 
     // Creates the egress descriptor.
@@ -78,9 +82,9 @@ inline void ethernet_send_frame(
     gxio_mpipe_equeue_put(&(mpipe_env->equeue), edesc);
 }
 
-static buffer_cursor_t _ethernet_write_header(
-    const mpipe_env_t *mpipe_env, buffer_cursor_t cursor, struct ether_addr dst,
-    uint16_t ether_type
+static buffer::cursor_t _write_header(
+    const mpipe::env_t *mpipe_env, buffer::cursor_t cursor,
+    struct ether_addr dst, uint16_t ether_type
 )
 {
     return cursor.write_with<struct ether_header>(
@@ -93,6 +97,6 @@ static buffer_cursor_t _ethernet_write_header(
     );
 };
 
-} /* namespace tcp_mpipe */
+} } } /* namespace tcp_mpipe::net::ethernet */
 
-#endif /* __TCP_MPIPE_ETHERNET_HPP__ */
+#endif /* __TCP_MPIPE_NET_ETHERNET_HPP__ */
