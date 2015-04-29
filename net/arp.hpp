@@ -77,7 +77,7 @@ void init(env_t *arp_env, mpipe::env_t *mpipe_env, struct in_addr ipv4_addr);
 
 // Processes an ARP message wich starts at the given cursor (Ethernet payload
 // without headers).
-void receive(env_t *env, buffer::cursor_t cursor);
+void receive_message(env_t *env, buffer::cursor_t cursor);
 
 // Pushes the given ARP message on the egress queue.
 //

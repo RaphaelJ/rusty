@@ -86,7 +86,7 @@ int main(int argc, char **argv)
         uint16_t ether_type = gxio_mpipe_idesc_get_ethertype(&idesc);
         switch (ether_type) {
         case ETHERTYPE_ARP:
-            arp::receive(&arp_env, mpipe::get_l3_cursor(&idesc));
+            arp::receive_message(&arp_env, mpipe::get_l3_cursor(&idesc));
             // TODO : free the idesc.
             break;
         case ETHERTYPE_IP:

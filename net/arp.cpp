@@ -53,7 +53,7 @@ static void _cache_update(
     env_t *env, struct ether_addr ether_addr, struct in_addr ipv4_addr
 );
 
-void receive(env_t *env, buffer::cursor_t cursor)
+void receive_message(env_t *env, buffer::cursor_t cursor)
 {
     cursor.read_with<struct ether_arp>([env](const struct ether_arp *msg) {
 
