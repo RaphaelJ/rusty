@@ -25,7 +25,6 @@
 using namespace std;
 
 using namespace tcp_mpipe::driver;
-using namespace tcp_mpipe::net;
 using namespace tcp_mpipe::utils;
 
 // Parsed CLI arguments.
@@ -46,43 +45,34 @@ int main(int argc, char **argv)
 
     cpu::bind_to_dataplane(0);
 
-    mpipe::env_t mpipe_env;
-    mpipe::init(&mpipe_env, args.link_name);
-
-    arp::env_t arp_env;
-    arp::init(&arp_env, &mpipe_env, args.ipv4_addr);
+    mpipe_t mpipe(args.link_name, args.ipv4_addr);
 
     TCP_MPIPE_DEBUG(
-        "mPIPE driver started on interface %s (%s) with %s as IPv4 address",
-        args.link_name, ether_ntoa(&(mpipe_env.link_addr)),
+        "Starts the mPIPE driver interface %s (%s) with %s as IPv4 address",
+        args.link_name, ether_ntoa(&(mpipe.data_link.addr)),
         inet_ntoa(args.ipv4_addr)
     );
 
-    tile_allocator::tile_allocator_t<int> allocator();
-
     sleep(2);
 
-    struct in_addr dest;
-    inet_aton("10.0.2.1", &dest);
-    arp::with_ether_addr(
-        &arp_env, dest, [=](struct ether_addr addr) {
-            TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
-        }
-    );
-    arp::with_ether_addr(
-        &arp_env, dest, [=](struct ether_addr addr) {
-            TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
-        }
-    );
+    mpipe.run();
 
-    while (1) {
-        gxio_mpipe_idesc_t idesc;
-        gxio_mpipe_iqueue_get(&(mpipe_env.iqueue), &idesc);
+    tile_allocator::tile_allocator_t<int> allocator();
 
-        ethernet::receive_frame(&mpipe_env, &arp_env, &idesc);
-    }
+//     struct in_addr dest;
+//     inet_aton("10.0.2.1", &dest);
+//     arp::with_ether_addr(
+//         &arp_env, dest, [=](struct ether_addr addr) {
+//             TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+//         }
+//     );
+//     arp::with_ether_addr(
+//         &arp_env, dest, [=](struct ether_addr addr) {
+//             TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+//         }
+//     );
 
-    mpipe::close(&mpipe_env);
+    mpipe.close();
 
     return EXIT_SUCCESS;
 }

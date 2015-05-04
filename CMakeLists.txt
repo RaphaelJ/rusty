@@ -8,8 +8,8 @@ set (CMAKE_CXX_FLAGS    "-g -Wall -std=c++11")
 find_package (Threads REQUIRED)
 
 add_subdirectory (util)
-add_subdirectory (driver)
 add_subdirectory (net)
+add_subdirectory (driver)
 
 include_directories (.)
 
