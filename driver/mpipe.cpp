@@ -31,7 +31,7 @@ using namespace tcp_mpipe::net;
 namespace tcp_mpipe {
 namespace driver {
 
-#define MPIPE_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[DRIVER] " MSG, ##__VA_ARGS__)
+#define MPIPE_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[MPIPE] " MSG, ##__VA_ARGS__)
 
 // Returns the hardware address of the link related to the given mPIPE
 // environment (in network byte order).
@@ -61,7 +61,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 {
     int result;
 
-    gxio_mpipe_context_t * const context = &(this->context);
+    gxio_mpipe_context_t * const context = &this->context;
 
     //
     // mPIPE driver.
@@ -70,7 +70,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
     //
 
     {
-        gxio_mpipe_link_t * const link = &(this->link);
+        gxio_mpipe_link_t * const link = &this->link;
 
         result = gxio_mpipe_link_instance(link_name);
         VERIFY_GXIO(result, "gxio_mpipe_link_instance()");
@@ -125,7 +125,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
         assert(tmc_alloc_get_pagesize(&alloc) >= ring_size);
 
-        TCP_MPIPE_DEBUG(
+        MPIPE_DEBUG(
             "Allocating %zu bytes for the NotifRing on a %zu bytes page",
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
@@ -141,7 +141,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
         // context.
 
         result = gxio_mpipe_iqueue_init(
-            &(this->iqueue), context, this->notif_ring_id,
+            &this->iqueue, context, this->notif_ring_id,
             this->notif_ring_mem, ring_size, 0
         );
         VERIFY_GXIO(result, "gxio_mpipe_iqueue_init()");
@@ -207,7 +207,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
         assert(tmc_alloc_get_pagesize(&alloc) >= ring_size);
 
-        TCP_MPIPE_DEBUG(
+        MPIPE_DEBUG(
             "Allocating %zu bytes for the eDMA ring on a %zu bytes page",
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
@@ -222,10 +222,10 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
         // Initializes an equeue which uses the eDMA ring memory and the channel
         // associated with the context's link.
 
-        int channel = gxio_mpipe_link_channel(&(this->link));
+        int channel = gxio_mpipe_link_channel(&this->link);
 
         result = gxio_mpipe_equeue_init(
-            &(this->equeue), context, this->edma_ring_id,
+            &this->equeue, context, this->edma_ring_id,
             channel, this->edma_ring_mem, ring_size, 0
         );
         VERIFY_GXIO(result, "gxio_gxio_equeue_init()");
@@ -306,7 +306,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
                 // NOTE: could fail if there is no page size >= 64 KB.
                 DIE("tmc_alloc_set_pagesize()");
 
-            TCP_MPIPE_DEBUG(
+            MPIPE_DEBUG(
                 "Allocating %lu x %zu bytes buffers (%zu bytes) and a %zu "
                 "bytes stack on %zu x %zu bytes page(s)",
                 stack_info.count, buffer_size, total_size, stack_size,
@@ -383,7 +383,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
     //
 
     {
-        gxio_mpipe_rules_t *rules = &(this->rules);
+        gxio_mpipe_rules_t *rules = &this->rules;
         gxio_mpipe_rules_init(rules, context);
 
         result = gxio_mpipe_rules_begin(
@@ -400,7 +400,11 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
     //
 
     {
-        data_link.init(this, _ether_addr(&(this->link)), ipv4_addr);
+        data_link.init(this, _ether_addr(&this->link), ipv4_addr);
+
+        max_packet_size = this->buffer_stacks.cend()->buffer_size;
+
+        MPIPE_DEBUG("Maximum packet size: %zu", max_packet_size);
     }
 }
 
@@ -408,9 +412,9 @@ void mpipe_t::run(void)
 {
     while (1) {
         gxio_mpipe_idesc_t idesc;
-        gxio_mpipe_iqueue_get(&(this->iqueue), &idesc);
+        gxio_mpipe_iqueue_get(&this->iqueue, &idesc);
 
-        if (gxio_mpipe_iqueue_drop_if_bad(&(this->iqueue), &idesc)) {
+        if (gxio_mpipe_iqueue_drop_if_bad(&this->iqueue, &idesc)) {
             MPIPE_DEBUG("Invalid packet dropped");
             continue;
         }
@@ -424,35 +428,37 @@ void mpipe_t::run(void)
 
         this->data_link.receive_frame(cursor);
 
-        gxio_mpipe_iqueue_drop(&(this->iqueue), &idesc);
+        gxio_mpipe_iqueue_drop(&this->iqueue, &idesc);
     }
 }
 
 
 void mpipe_t::send_packet(
-    size_t payload_size, function<void(cursor_t)> payload_writer
+    size_t packet_size, function<void(cursor_t)> packet_writer
 )
 {
-    // Allocates a buffer and executes the 'payload_writer' on its memory.
+    assert(packet_size <= max_packet_size);
 
-    gxio_mpipe_bdesc_t bdesc = _alloc_buffer(payload_size);
+    // Allocates a buffer and executes the 'packet_writer' on its memory.
 
-    cursor_t cursor(&bdesc, payload_size);
-    payload_writer(cursor);
+    gxio_mpipe_bdesc_t bdesc = _alloc_buffer(packet_size);
+
+    cursor_t cursor(&bdesc, packet_size);
+    packet_writer(cursor);
 
     // Creates the egress descriptor.
 
     gxio_mpipe_edesc_t edesc = { 0 };
     edesc.bound     = 1;            // Last and single descriptor for the trame.
     edesc.hwb       = 1,            // The buffer will be automaticaly freed.
-    edesc.xfer_size = payload_size;
+    edesc.xfer_size = packet_size;
 
     // Sets 'va', 'stack_idx', 'inst', 'hwb', 'size' and 'c'.
     gxio_mpipe_edesc_set_bdesc(&edesc, bdesc); 
 
     // NOTE: if multiple packets are to be sent, reserve() + put_at() with a
     // single memory barrier should be more efficient.
-    gxio_mpipe_equeue_put(&(this->equeue), edesc);
+    gxio_mpipe_equeue_put(&this->equeue, edesc);
 }
 
 void mpipe_t::close(void)
@@ -461,10 +467,10 @@ void mpipe_t::close(void)
 
     // Releases the mPIPE context
 
-    result = gxio_mpipe_link_close(&(this->link));
+    result = gxio_mpipe_link_close(&this->link);
     VERIFY_GXIO(result, "gxio_mpipe_link_close(()");
 
-    result = gxio_mpipe_destroy(&(this->context));
+    result = gxio_mpipe_destroy(&this->context);
     VERIFY_GXIO(result, "gxio_mpipe_destroy()");
 
     // Releases rings memory
@@ -490,7 +496,7 @@ gxio_mpipe_bdesc_t mpipe_t::_alloc_buffer(size_t size)
     // Finds the first buffer size large enough to hold the requested buffer.
     for (const buffer_stack_t &stack : this->buffer_stacks) {
         if (stack.buffer_size >= size)
-            return gxio_mpipe_pop_buffer_bdesc(&(this->context), stack.id);
+            return gxio_mpipe_pop_buffer_bdesc(&this->context, stack.id);
     }
 
     // TODO: build a chained buffer if possible.

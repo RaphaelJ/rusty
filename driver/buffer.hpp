@@ -246,27 +246,47 @@ struct cursor_t {
         );
     }
 
+    // Gives to the given function a pointer to read one instance of the data
+    // and a cursor to the following data. The return value of the given
+    // function will be forwarded as the return value of 'read_with()'.
+    //
+    // Will directly refer ence the buffer's memory if it's possible
+    // ('can_in_place()'), will gives a reference to a copy otherwise.
+    //
+    // The call to the given function is a tail-call.
+    //
+    // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
+    // of bytes to read.
+    template <typename T, typename R>
+    inline R read_with(function<R(const T *, cursor_t)> f)
+    {
+        if (can_in_place<T>()) {
+            T *p;
+            cursor_t cursor = in_place<T>(&p);
+            return f(p, cursor);
+        } else {
+            T data;
+            cursor_t cursor = read<T>(&data);
+            return f(&data, cursor);
+        }
+    }
+
     // Gives a pointer to read one instance of the data to the function.
     //
     // Will directly reference the buffer's memory if it's possible
     // ('can_in_place()'), will gives a reference to a copy otherwise.
+    //
+    // The call to the given function is *not* a tail-call.
     //
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to read.
     template <typename T>
     inline cursor_t read_with(function<void(const T *)> f)
     {
-        if (can_in_place<T>()) {
-            T *p;
-            cursor_t cursor = in_place<T>(&p);
-            f(p);
+        return read_with<T, cursor_t>([&f](const T *data, cursor_t cursor) {
+            f(data);
             return cursor;
-        } else {
-            T data;
-            cursor_t cursor = read<T>(&data);
-            f(&data);
-            return cursor;
-        }
+        });
     }
 
     // Gives a pointer to write one instance of the data to the function.

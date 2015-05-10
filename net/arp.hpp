@@ -26,8 +26,8 @@ namespace net {
 #define ARP_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[ARP] " MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
-static const unsigned short int ARPOP_REQUEST_NET = htons(ARPOP_REQUEST);
-static const unsigned short int ARPOP_REPLY_NET   = htons(ARPOP_REPLY);
+static const uint16_t ARPOP_REQUEST_NET = htons(ARPOP_REQUEST);
+static const uint16_t ARPOP_REPLY_NET   = htons(ARPOP_REPLY);
 
 template <typename data_link_t, typename proto_t>
 struct arp_t {
@@ -57,8 +57,8 @@ struct arp_t {
     // Static fields
     //
 
-    const unsigned short int DATA_LINK_TYPE_NET = htons(data_link_t::ARP_TYPE);
-    const unsigned short int PROTO_TYPE_NET     = htons(proto_t::ARP_TYPE);
+    const uint16_t DATA_LINK_TYPE_NET = htons(data_link_t::ARP_TYPE);
+    const uint16_t PROTO_TYPE_NET     = htons(proto_t::ARP_TYPE);
 
     //
     // Fields
@@ -112,7 +112,7 @@ struct arp_t {
     }
 
     // Initializes an ARP environment for the given data-link and protocol layer
-    // instances.
+    // instances.ipv4
     void init(data_link_t *_data_link, proto_t *_proto)
     {
         data_link = _data_link;
@@ -126,34 +126,43 @@ struct arp_t {
     // a frame.
     void receive_message(cursor_t cursor)
     {
-        cursor.template read_with<arp_message_t>
-        ([this](const arp_message_t *msg) {
-            #define IGNORE_ARP_MSG(WHY, ...)                                   \
-                do {                                                           \
-                    ARP_DEBUG("Message ignored: " WHY, ##__VA_ARGS__);         \
-                    return;                                                    \
-                } while (0)
+        #define IGNORE_MSG(WHY, ...)                                           \
+            do {                                                               \
+                ARP_DEBUG("Message ignored: " WHY, ##__VA_ARGS__);             \
+                return;                                                        \
+            } while (0)
 
+        size_t cursor_size = cursor.size();
+
+        if (UNLIKELY(cursor_size < sizeof (struct arphdr))) {
+            IGNORE_MSG("too small to hold an ARP message's fixed-size header");
+            return;
+        }
+
+        cursor.template read_with<arp_message_t>(
+        [this, cursor_size](const arp_message_t *msg) {
+            //
             // Checks that the ARP message is for the given data-link and
             // protocol layers.
             // Ignores the message otherwise.
+            //
 
             if (UNLIKELY(msg->hdr.ar_hrd != DATA_LINK_TYPE_NET)) {
-                IGNORE_ARP_MSG(
+                IGNORE_MSG(
                     "invalid hardware type (received %hu, expected %hu)",
-                    msg->hdr.ar_hrd, data_link_t::ARP_TYPE
+                    htons(msg->hdr.ar_hrd), data_link_t::ARP_TYPE
                 );
             }
 
             if (UNLIKELY(msg->hdr.ar_pro != PROTO_TYPE_NET)) {
-                IGNORE_ARP_MSG(
+                IGNORE_MSG(
                     "invalid hardware type (received %hu, expected  %hu)",
-                    msg->hdr.ar_pro, proto_t::ARP_TYPE
+                    htons(msg->hdr.ar_pro), proto_t::ARP_TYPE
                 );
             }
 
             if (UNLIKELY(msg->hdr.ar_hln != data_link_t::ADDR_LEN)) {
-                IGNORE_ARP_MSG(
+                IGNORE_MSG(
                     "invalid hardware address size "
                     "(received %zu, expected %zu)",
                     (size_t) msg->hdr.ar_hln, (size_t) data_link_t::ADDR_LEN
@@ -161,14 +170,19 @@ struct arp_t {
             }
 
             if (UNLIKELY(msg->hdr.ar_pln != proto_t::ADDR_LEN)) {
-                IGNORE_ARP_MSG(
+                IGNORE_MSG(
                     "invalid hardware address size "
                     "(received %zu, expected %zu)",
                     (size_t) msg->hdr.ar_pln, (size_t) proto_t::ADDR_LEN
                 );
             }
 
+            if (UNLIKELY(cursor_size < sizeof (arp_message_t)))
+                IGNORE_MSG("too small to hold an ARP message");
+
+            //
             // Processes the ARP message.
+            //
 
             if (msg->hdr.ar_op == ARPOP_REQUEST_NET) {
                 ARP_DEBUG(
@@ -179,9 +193,9 @@ struct arp_t {
 
                 _cache_update(msg->sha, msg->spa);
 
-                proto_addr_t *proto_addr = &(this->proto->addr);
+                proto_addr_t *proto_addr = &this->proto->addr;
 
-                if (!memcmp(&(msg->tpa), proto_addr, sizeof (proto_addr_t))) {
+                if (!memcmp(&msg->tpa, proto_addr, sizeof (proto_addr_t))) {
                     // Someone is asking for our Ethernet address.
                     // Sends an ARP reply with our protocol address to the host
                     // which sent the request.
@@ -197,18 +211,16 @@ struct arp_t {
 
                 _cache_update(msg->sha, msg->spa);
             } else
-                IGNORE_ARP_MSG("unknown ARP opcode (%hu)", msg->hdr.ar_op);
-
-            #undef IGNORE_ARP_MSG
+                IGNORE_MSG("unknown ARP opcode (%hu)", msg->hdr.ar_op);
         });
+
+        #undef IGNORE_MSG
     }
 
     // Creates and push an ARP message to the data-link layer (L2).
     //
     // 'op', 'tha' and 'tpa' must be in network byte order.
-    void send_message(
-        unsigned short int op, data_link_addr_t tha, proto_addr_t tpa
-    )
+    void send_message(uint16_t op, data_link_addr_t tha, proto_addr_t tpa)
     {
         #ifdef NDEBUG
             if (op == ARPOP_REQUEST_NET) {
@@ -269,7 +281,7 @@ struct arp_t {
             // Hardware address is cached.
 
             // unlock
-            callback(&(it->second));
+            callback(&it->second);
             return true;
         } else {
             // Hardware address is NOT cached.
@@ -322,7 +334,7 @@ private:
             // Address already in cache, replace the previous value if
             // different.
 
-            data_link_addr_t *value = &(p.first->second);
+            data_link_addr_t *value = &p.first->second;
 
             bool change = memcmp(
                 value, &data_link_addr, sizeof (data_link_addr_t)
@@ -383,8 +395,7 @@ private:
     //
     // NOTE: inline ?
     cursor_t _write_message(
-        cursor_t cursor, unsigned short int op, data_link_addr_t tha,
-        proto_addr_t tpa
+        cursor_t cursor, uint16_t op, data_link_addr_t tha, proto_addr_t tpa
     )
     {
         return cursor.template write_with<arp_message_t>(
@@ -392,21 +403,18 @@ private:
                 msg->hdr.ar_hrd = DATA_LINK_TYPE_NET;
                 msg->hdr.ar_pro = PROTO_TYPE_NET;
 
-                msg->hdr.ar_hln = (unsigned char) data_link_t::ADDR_LEN;
-                msg->hdr.ar_pln = (unsigned char) proto_t::ADDR_LEN;
+                msg->hdr.ar_hln = (uint8_t) data_link_t::ADDR_LEN;
+                msg->hdr.ar_pln = (uint8_t) proto_t::ADDR_LEN;
 
                 msg->hdr.ar_op = op;
 
                 memcpy(
-                    &(msg->sha), &(this->data_link->addr),
-                    sizeof (data_link_addr_t)
+                    &msg->sha, &this->data_link->addr, sizeof (data_link_addr_t)
                 );
-                memcpy(
-                    &(msg->spa), &(this->proto->addr), sizeof (proto_addr_t)
-                );
+                memcpy(&msg->spa, &this->proto->addr, sizeof (proto_addr_t));
 
-                memcpy(&(msg->tha), &tha, sizeof (data_link_addr_t));
-                memcpy(&(msg->tpa), &tpa, sizeof (proto_addr_t));
+                memcpy(&msg->tha, &tha, sizeof (data_link_addr_t));
+                memcpy(&msg->tpa, &tpa, sizeof (proto_addr_t));
             }
         );
     }

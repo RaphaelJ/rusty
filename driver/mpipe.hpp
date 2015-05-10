@@ -14,7 +14,7 @@
 #include <array>
 #include <vector>
 
-#include <gxio/mpipe.h> // gxio_mpipe_*, GXIO_MPIPE_*
+#include <gxio/mpipe.h>         // gxio_mpipe_*, GXIO_MPIPE_*
 
 #include "driver/buffer.hpp"
 #include "net/ethernet.hpp"
@@ -103,6 +103,10 @@ struct mpipe_t {
     typedef ethernet_mpipe_t::ipv4_ethernet_t   ipv4_mpipe_t;
 
     //
+    // Static fields
+    //
+
+    //
     // Fields
     //
 
@@ -125,6 +129,9 @@ struct mpipe_t {
     gxio_mpipe_equeue_t     equeue;
     unsigned int            edma_ring_id;
     char                    *edma_ring_mem;
+
+    // Maximum packet size. Doesn't change after intialization.
+    size_t                  max_packet_size;
 
     // Buffers and their stacks. Stacks are sorted by increasing buffer sizes.
     struct buffer_stack_t {
@@ -169,10 +176,10 @@ struct mpipe_t {
     void run(void);
 
     // Sends a packet of the given size on the interface by calling the
-    // 'payload_writer' with a cursor corresponding to a buffer allocated
+    // 'packet_writer' with a cursor corresponding to a buffer allocated
     // memory.
     void send_packet(
-        size_t payload_size, function<void(cursor_t)> payload_writer
+        size_t packet_size, function<void(cursor_t)> packet_writer
     );
 
     // Releases mPIPE resources referenced by current mPIPE environment.
