@@ -402,7 +402,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
     {
         data_link.init(this, _ether_addr(&this->link), ipv4_addr);
 
-        max_packet_size = this->buffer_stacks.cend()->buffer_size;
+        max_packet_size = this->buffer_stacks.back().buffer_size;
 
         MPIPE_DEBUG("Maximum packet size: %zu", max_packet_size);
     }
@@ -424,7 +424,7 @@ void mpipe_t::run(void)
         cursor_t cursor(&idesc);
         cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
 
-        MPIPE_DEBUG("Received an %zu bytes packet", cursor.size());
+        MPIPE_DEBUG("Receives an %zu bytes packet", cursor.size());
 
         this->data_link.receive_frame(cursor);
 
@@ -438,6 +438,8 @@ void mpipe_t::send_packet(
 )
 {
     assert(packet_size <= max_packet_size);
+
+    MPIPE_DEBUG("Sends a %zu bytes packet", packet_size);
 
     // Allocates a buffer and executes the 'packet_writer' on its memory.
 

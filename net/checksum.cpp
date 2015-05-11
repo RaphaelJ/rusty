@@ -5,6 +5,7 @@
 // Computes a checksum required by IPv4 and TCP protocols.
 //
 
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 
@@ -75,6 +76,8 @@ uint16_t checksum(const void *data, size_t size)
     //
     // [1]:
     // microhowto.info/howto/calculate_an_internet_protocol_checksum_in_c.html
+
+    assert (data != nullptr && size >= 0);
 
     uint64_t sum = 0;
     const uint32_t *data32 = (const uint32_t *) data;

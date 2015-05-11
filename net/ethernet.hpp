@@ -138,7 +138,12 @@ struct ethernet_t {
                     return;                                                    \
                 } while (0)
 
-            if (UNLIKELY(memcmp(&hdr->ether_shost, &addr, sizeof (addr_t))))
+            static const addr_t broadcast_addr = BROADCAST_ADDR;
+
+            if (UNLIKELY(
+                   memcmp(&hdr->ether_dhost, &addr,           sizeof (addr_t))
+                && memcmp(&hdr->ether_dhost, &broadcast_addr, sizeof (addr_t))
+            ))
                 IGNORE_FRAME("bad recipient");
 
             #define RECEIVE_FRAME()                                            \
@@ -182,15 +187,13 @@ struct ethernet_t {
         size_t frame_size = HEADERS_SIZE + payload_size;
 
         ETH_DEBUG(
-            "Sends a %zu bytes ethernet frame to %s with type %" PRIu16,
-            frame_size, addr_to_alpha(dst), ether_type
+            "Sends a %zu bytes ethernet frame to %s with type 0x%x",
+            frame_size, addr_to_alpha(dst), ntohs(ether_type)
         );
-
-        addr_t src = this->phys->link_addr;
 
         this->phys->send_packet(
             frame_size,
-            [this, src, dst, ether_type, &payload_writer](cursor_t cursor) {
+            [this, dst, ether_type, &payload_writer](cursor_t cursor) {
                 cursor = _write_header(cursor, dst, ether_type);
                 payload_writer(cursor);
             }
@@ -240,9 +243,8 @@ private:
     {
         return cursor.template write_with<struct ether_header>(
         [this, dst, ether_type](struct ether_header *hdr) {
-            const addr_t *src = &this->phys->link_addr;
-            mempcpy(&hdr->ether_dhost, &dst, sizeof (addr_t));
-            mempcpy(&hdr->ether_shost, src,  sizeof (addr_t));
+            mempcpy(&hdr->ether_dhost, &dst,  sizeof (addr_t));
+            mempcpy(&hdr->ether_shost, &addr, sizeof (addr_t));
             hdr->ether_type = ether_type;
         });
     }

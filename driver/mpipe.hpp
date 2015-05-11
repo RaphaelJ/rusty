@@ -114,9 +114,6 @@ struct mpipe_t {
     gxio_mpipe_context_t    context;
     gxio_mpipe_link_t       link;
 
-    // Ethernet address of the network interface (in network byte order).
-    struct ether_addr       link_addr;
-
     // Ingres
     gxio_mpipe_iqueue_t     iqueue;
     unsigned int            notif_ring_id;
