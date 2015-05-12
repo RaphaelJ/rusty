@@ -25,12 +25,13 @@ using namespace std;
 namespace tcp_mpipe {
 namespace net {
 
-#define IPV4_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[IPV4] " MSG, ##__VA_ARGS__)
+#define IPV4_COLOR     COLOR_CYN
+#define IPV4_DEBUG(MSG, ...)                                                   \
+    TCP_MPIPE_DEBUG("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
-static const uint32_t IPVERSION_NET     = htons(IPVERSION);
-static const size_t   HEADERS_LEN_NET   = // Headers size in 32 bit words.
-    htonl(sizeof (struct iphdr) / sizeof (uint32_t));
+static const size_t   HEADERS_LEN   = // Headers size in 32 bit words.
+    sizeof (struct iphdr) / sizeof (uint32_t);
 
 template <typename data_link_t>
 struct ipv4_t {
@@ -138,17 +139,17 @@ struct ipv4_t {
             // Checks datagram validity.
             //
 
-            if (UNLIKELY(hdr->version != IPVERSION_NET)) {
+            if (UNLIKELY(hdr->version != IPVERSION)) {
                 IGNORE_DATAGRAM(
                     "invalid IP version (received %u, excpected %u)",
-                    ntohs(hdr->version), IPVERSION
+                    hdr->version, IPVERSION
                 );
             }
 
-            if (hdr->ihl != HEADERS_LEN_NET)
+            if (hdr->ihl != HEADERS_LEN)
                 IGNORE_DATAGRAM("options are not supported");
 
-            size_t header_size = ntohl(hdr->ihl) * sizeof (uint32_t),
+            size_t header_size = hdr->ihl * sizeof (uint32_t),
                    total_size  = ntohs(hdr->tot_len);
 
             if (UNLIKELY(total_size < header_size))
@@ -264,8 +265,8 @@ private:
 
         return cursor.template write_with<struct iphdr>(
         [this, datagram_size, datagram_id, protocol, dst](struct iphdr *hdr) {
-            hdr->version  = IPVERSION_NET;
-            hdr->ihl      = HEADERS_LEN_NET;
+            hdr->version  = IPVERSION;
+            hdr->ihl      = HEADERS_LEN;
             hdr->tos      = IPTOS_CLASS_DEFAULT;
             hdr->tot_len  = htons(datagram_size);
             hdr->id       = datagram_id;
@@ -285,6 +286,9 @@ private:
         return min(this->data_link->max_payload_size, 65535) - HEADERS_SIZE;
     }
 };
+
+#undef IPV4_COLOR
+#undef IPV4_DEBUG
 
 } } /* namespace tcp_mpipe::net */
 

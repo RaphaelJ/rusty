@@ -9,7 +9,7 @@
 
 #include <gxio/mpipe.h> // MPIPE_EDMA_DESC_*
 
-#include "util/macros.hpp"
+#include "driver/driver.hpp"
 
 #include "driver/buffer.hpp"
 
@@ -69,7 +69,7 @@ void cursor_t::_init_with_bdesc(
         next_size    = total_size - current_size;
         return;
     default:
-        DIE("Invalid buffer descriptor");
+        DRIVER_DIE("Invalid buffer descriptor");
     };
 }
 

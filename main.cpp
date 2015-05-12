@@ -27,6 +27,10 @@ using namespace std;
 using namespace tcp_mpipe::driver;
 using namespace tcp_mpipe::utils;
 
+#define MAIN_COLOR     COLOR_GRN
+#define MAIN_DEBUG(MSG, ...)                                                   \
+    TCP_MPIPE_DEBUG("MAIN", MAIN_COLOR, MSG, ##__VA_ARGS__)
+
 // Parsed CLI arguments.
 struct args_t {
     char            *link_name;
@@ -47,7 +51,7 @@ int main(int argc, char **argv)
 
     mpipe_t mpipe(args.link_name, args.ipv4_addr);
 
-    TCP_MPIPE_DEBUG(
+    MAIN_DEBUG(
         "Starts the mPIPE driver interface %s (%s) with %s as IPv4 address",
         args.link_name, ether_ntoa(&(mpipe.data_link.addr)),
         inet_ntoa(args.ipv4_addr)
@@ -63,12 +67,12 @@ int main(int argc, char **argv)
 //     inet_aton("10.0.2.1", &dest);
 //     arp::with_ether_addr(
 //         &arp_env, dest, [=](struct ether_addr addr) {
-//             TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+//             MAIN_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
 //         }
 //     );
 //     arp::with_ether_addr(
 //         &arp_env, dest, [=](struct ether_addr addr) {
-//             TCP_MPIPE_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
+//             MAIN_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
 //         }
 //     );
 
@@ -102,3 +106,7 @@ static bool _parse_args(int argc, char **argv, args_t *args)
 
     return true;
 }
+
+#undef MAIN_COLOR
+#undef MAIN_DEBUG
+

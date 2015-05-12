@@ -22,7 +22,11 @@
 namespace tcp_mpipe {
 namespace net {
 
-#define ETH_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[ETH] " MSG, ##__VA_ARGS__)
+#define ETH_COLOR       COLOR_RED
+#define ETH_DEBUG(MSG, ...)                                                    \
+    TCP_MPIPE_DEBUG("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
+#define ETH_ERROR(MSG, ...)                                                    \
+    TCP_MPIPE_ERROR("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
 static const uint16_t ETHERTYPE_ARP_NET = htons(ETHERTYPE_ARP);
@@ -122,7 +126,7 @@ struct ethernet_t {
     void receive_frame(cursor_t cursor)
     {
         if (UNLIKELY(cursor.size() < HEADERS_SIZE)) {
-            ETH_DEBUG("Frame ignored: too small to hold an Ethernet header");
+            ETH_ERROR("Frame ignored: too small to hold an Ethernet header");
             return;
         }
 
@@ -130,7 +134,7 @@ struct ethernet_t {
         [this](const struct ether_header *hdr, cursor_t payload) {
             #define IGNORE_FRAME(WHY, ...)                                     \
                 do {                                                           \
-                    ETH_DEBUG(                                                 \
+                    ETH_ERROR(                                                 \
                         "Frame from %s ignored: " WHY,                         \
                         addr_to_alpha(*((addr_t *) hdr->ether_shost)),         \
                         ##__VA_ARGS__                                          \
@@ -256,7 +260,9 @@ private:
     }
 };
 
+#undef ETH_COLOR
 #undef ETH_DEBUG
+#undef ETH_ERROR
 
 } } /* namespace tcp_mpipe::net */
 

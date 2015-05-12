@@ -2,7 +2,7 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
-// Wrappers over mPIPE functions.
+// Wrapper over mPIPE functions.
 //
 // Makes initialization of the driver easier and provides an interface for the
 // Ethernet layer to use the mPIPE driver.
@@ -19,8 +19,8 @@
 #include <tmc/alloc.h>      // tmc_alloc_map, tmc_alloc_set_home,
                             // tmc_alloc_set_pagesize.
 
+#include "driver/driver.hpp"
 #include "net/ethernet.hpp"
-#include "util/macros.hpp"
 
 #include "driver/mpipe.hpp"
 
@@ -31,19 +31,9 @@ using namespace tcp_mpipe::net;
 namespace tcp_mpipe {
 namespace driver {
 
-#define MPIPE_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[MPIPE] " MSG, ##__VA_ARGS__)
-
 // Returns the hardware address of the link related to the given mPIPE
 // environment (in network byte order).
 static struct ether_addr _ether_addr(gxio_mpipe_link_t *link);
-
-// Checks for errors from the GXIO API, which returns negative error codes.
-#define VERIFY_GXIO(VAL, WHAT)                                                 \
-  do {                                                                         \
-    long __val = (long) (VAL);                                                 \
-    if (__val < 0)                                                             \
-        DIE("%s: (%ld) %s", (WHAT), __val, gxio_strerror(__val));              \
-  } while (0)
 
 // The NotifRing is being part of a single unique NotifGroup. One single bucket
 // is mapped to this NotifGroup.
@@ -121,18 +111,18 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
         // Sets page_size >= ring_size.
         if (tmc_alloc_set_pagesize(&alloc, ring_size) == NULL)
-            DIE("tmc_alloc_set_pagesize()");
+            DRIVER_DIE("tmc_alloc_set_pagesize()");
 
         assert(tmc_alloc_get_pagesize(&alloc) >= ring_size);
 
-        MPIPE_DEBUG(
+        DRIVER_DEBUG(
             "Allocating %zu bytes for the NotifRing on a %zu bytes page",
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
         this->notif_ring_mem = (char *) tmc_alloc_map(&alloc, ring_size);
         if (this->notif_ring_mem == NULL)
-            DIE("tmc_alloc_map()");
+            DRIVER_DIE("tmc_alloc_map()");
 
         // ring is 4 KB aligned.
         assert(((intptr_t) this->notif_ring_mem & 0xFFF) == 0);
@@ -203,18 +193,18 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
         // Sets page_size >= ring_size.
         if (tmc_alloc_set_pagesize(&alloc, ring_size) == NULL)
-            DIE("tmc_alloc_set_pagesize()");
+            DRIVER_DIE("tmc_alloc_set_pagesize()");
 
         assert(tmc_alloc_get_pagesize(&alloc) >= ring_size);
 
-        MPIPE_DEBUG(
+        DRIVER_DEBUG(
             "Allocating %zu bytes for the eDMA ring on a %zu bytes page",
             ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
         this->edma_ring_mem = (char *) tmc_alloc_map(&alloc, ring_size);
         if (this->edma_ring_mem == NULL)
-            DIE("tmc_alloc_map()");
+            DRIVER_DIE("tmc_alloc_map()");
 
         // ring is 1 KB aligned.
         assert(((intptr_t) this->edma_ring_mem & 0x3FF) == 0);
@@ -304,9 +294,9 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
             if (tmc_alloc_set_pagesize(&alloc, min_page_size) == NULL)
                 // NOTE: could fail if there is no page size >= 64 KB.
-                DIE("tmc_alloc_set_pagesize()");
+                DRIVER_DIE("tmc_alloc_set_pagesize()");
 
-            MPIPE_DEBUG(
+            DRIVER_DEBUG(
                 "Allocating %lu x %zu bytes buffers (%zu bytes) and a %zu "
                 "bytes stack on %zu x %zu bytes page(s)",
                 stack_info.count, buffer_size, total_size, stack_size,
@@ -316,7 +306,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
             char *mem = (char *) tmc_alloc_map(&alloc, total_size);
             if (mem == NULL)
-                DIE("tmc_alloc_map()");
+                DRIVER_DIE("tmc_alloc_map()");
 
             assert(((intptr_t) mem & 0xFFFF) == 0); // mem is 64 KB aligned.
 
@@ -404,7 +394,7 @@ mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
 
         max_packet_size = this->buffer_stacks.back().buffer_size;
 
-        MPIPE_DEBUG("Maximum packet size: %zu", max_packet_size);
+        DRIVER_DEBUG("Maximum packet size: %zu", max_packet_size);
     }
 }
 
@@ -415,7 +405,7 @@ void mpipe_t::run(void)
         gxio_mpipe_iqueue_get(&this->iqueue, &idesc);
 
         if (gxio_mpipe_iqueue_drop_if_bad(&this->iqueue, &idesc)) {
-            MPIPE_DEBUG("Invalid packet dropped");
+            DRIVER_DEBUG("Invalid packet dropped");
             continue;
         }
 
@@ -424,7 +414,7 @@ void mpipe_t::run(void)
         cursor_t cursor(&idesc);
         cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
 
-        MPIPE_DEBUG("Receives an %zu bytes packet", cursor.size());
+        DRIVER_DEBUG("Receives an %zu bytes packet", cursor.size());
 
         this->data_link.receive_frame(cursor);
 
@@ -439,7 +429,7 @@ void mpipe_t::send_packet(
 {
     assert(packet_size <= max_packet_size);
 
-    MPIPE_DEBUG("Sends a %zu bytes packet", packet_size);
+    DRIVER_DEBUG("Sends a %zu bytes packet", packet_size);
 
     // Allocates a buffer and executes the 'packet_writer' on its memory.
 
@@ -502,7 +492,7 @@ gxio_mpipe_bdesc_t mpipe_t::_alloc_buffer(size_t size)
     }
 
     // TODO: build a chained buffer if possible.
-    DIE("No buffer is sufficiently large to hold the requested size.");
+    DRIVER_DIE("No buffer is sufficiently large to hold the requested size.");
 }
 
 static struct ether_addr _ether_addr(gxio_mpipe_link_t *link)
@@ -524,5 +514,3 @@ static struct ether_addr _ether_addr(gxio_mpipe_link_t *link)
 }
 
 } } /* namespace tcp_mpipe::driver */
-
-#undef VERIFY_GXIO

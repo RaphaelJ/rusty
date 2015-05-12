@@ -12,7 +12,7 @@
 #include <tmc/cpus.h>       // tmc_cpus_*
 #include <sys/dataplane.h>  // set_dataplane
 
-#include "util/macros.hpp"
+#include "driver/driver.hpp"
 
 #include "driver/cpu.hpp"
 
@@ -33,7 +33,7 @@ void bind_to_dataplane(unsigned int n)
 
     unsigned int count = tmc_cpus_count(&dataplane_cpu_set);
     if (n + 1 > count) {
-        DIE(
+        DRIVER_DIE(
             "bind_to_dataplane(): not enough dataplane Tiles "
             "(%d requested, having %d)", n + 1, count
         );

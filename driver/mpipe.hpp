@@ -2,7 +2,7 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
-// Wrappers over mPIPE functions.
+// Wrapper over mPIPE functions.
 //
 // Makes initialization of the driver easier and provides an interface for the
 // Ethernet layer to use the mPIPE driver.

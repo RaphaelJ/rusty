@@ -13,7 +13,7 @@
 #include <tmc/alloc.h>      // tmc_alloc_t, tmc_alloc_*
 #include <tmc/mspace.h>     // tmc_mspace_*
 
-#include "util/macros.hpp"
+#include "driver/driver.hpp"
 
 using namespace std;
 
@@ -145,7 +145,7 @@ private:
 
     static void _free_mspace(tmc_mspace *mspace)
     {
-        TCP_MPIPE_DEBUG("Freeing mpace starting at %zu", (size_t) *mspace);
+        DRIVER_DEBUG("Freeing mpace starting at %zu", (size_t) *mspace);
         tmc_mspace_destroy(*mspace);
         delete mspace;
     }

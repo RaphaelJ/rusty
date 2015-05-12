@@ -23,7 +23,13 @@ using namespace std;
 namespace tcp_mpipe {
 namespace net {
 
-#define ARP_DEBUG(MSG, ...) TCP_MPIPE_DEBUG("[ARP] " MSG, ##__VA_ARGS__)
+#define ARP_COLOR       COLOR_BLU
+#define ARP_DEBUG(MSG, ...)                                                    \
+    TCP_MPIPE_DEBUG("ARP", ARP_COLOR, MSG, ##__VA_ARGS__)
+#define ARP_ERROR(MSG, ...)                                                    \
+    TCP_MPIPE_ERROR("ARP", ARP_COLOR, MSG, ##__VA_ARGS__)
+#define ARP_DIE(MSG, ...)                                                      \
+    TCP_MPIPE_DIE(  "ARP", ARP_COLOR, MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
 static const uint16_t ARPOP_REQUEST_NET = htons(ARPOP_REQUEST);
@@ -128,7 +134,7 @@ struct arp_t {
     {
         #define IGNORE_MSG(WHY, ...)                                           \
             do {                                                               \
-                ARP_DEBUG("Message ignored: " WHY, ##__VA_ARGS__);             \
+                ARP_ERROR("Message ignored: " WHY, ##__VA_ARGS__);             \
                 return;                                                        \
             } while (0)
 
@@ -222,19 +228,19 @@ struct arp_t {
     // 'op', 'tha' and 'tpa' must be in network byte order.
     void send_message(uint16_t op, data_link_addr_t tha, proto_addr_t tpa)
     {
-        #ifdef NDEBUG
+        #ifndef NDEBUG
             if (op == ARPOP_REQUEST_NET) {
                 ARP_DEBUG(
                     "Requests for %s at %s", proto_t::addr_to_alpha(tpa),
                     data_link_t::addr_to_alpha(tha)
                 );
-            } else if (msg->arp_op == ARPOP_REPLY_NET) {
+            } else if (op == ARPOP_REPLY_NET) {
                 ARP_DEBUG(
                     "Replies to %s (%s)", proto_t::addr_to_alpha(tpa),
                     data_link_t::addr_to_alpha(tha)
                 );
             } else {
-                DIE(
+                ARP_DIE(
                     "Trying to send an ARP message with an invalid operation "
                     "code"
                 );
@@ -420,6 +426,7 @@ private:
     }
 };
 
+#undef ARP_COLOR
 #undef ARP_DEBUG
 
 } } /* namespace tcp_mpipe::net */
