@@ -15,9 +15,9 @@
 #include <net/ethernet.h>   // ether_addr, ETHERTYPE_*
 #include <netinet/ether.h>  // ether_ntoa
 
-#include "net/arp.hpp"
-#include "net/ipv4.hpp"
-#include "util/macros.hpp"
+#include "net/arp.hpp"      // arp_t
+#include "net/ipv4.hpp"     // ipv4_t
+#include "util/macros.hpp"  // TCP_MPIPE_*, COLOR_*
 
 namespace tcp_mpipe {
 namespace net {

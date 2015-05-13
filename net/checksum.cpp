@@ -25,7 +25,8 @@ uint16_t checksum(const void *data, size_t size)
     // When a 16 bits one's complement addition produces a carry bit, the carry
     // must be added to the 16 bits result.
     //
-    // For example, the 4 bits one's complement addition of 1111 and 1011:
+    // As an example, here is the 4 bits one's complement addition of 1111 and
+    // 1011:
     //
     //        1111
     //      + 1101

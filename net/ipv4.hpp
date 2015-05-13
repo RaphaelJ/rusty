@@ -18,7 +18,9 @@
 #include <netinet/ip.h>         // iphdr, IPDEFTTL, IPVERSION, IP_MF,
                                 // IPPROTO_TCP, IPTOS_CLASS_DEFAULT
 
-#include "net/checksum.hpp"
+#include "net/checksum.hpp"     // checksum
+#include "net/tcp.hpp"          // tcp_t
+#include "util/macros.hpp"      // TCP_MPIPE_*, COLOR_*
 
 using namespace std;
 
@@ -28,6 +30,8 @@ namespace net {
 #define IPV4_COLOR     COLOR_CYN
 #define IPV4_DEBUG(MSG, ...)                                                   \
     TCP_MPIPE_DEBUG("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
+#define IPV4_ERROR(MSG, ...)                                                   \
+    TCP_MPIPE_ERROR("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
 static const size_t   HEADERS_LEN   = // Headers size in 32 bit words.
@@ -67,6 +71,9 @@ struct ipv4_t {
     data_link_t                 *data_link;
     arp_t<data_link_t, this_t>  *arp;
 
+    // Upper protocol instances
+    tcp_t<this_t>               tcp;
+
     // Instance's IPv4 address in network byte order.
     addr_t                      addr;
 
@@ -96,8 +103,7 @@ struct ipv4_t {
     // calling 'init()'.
     ipv4_t(
         data_link_t *_data_link, arp_t<data_link_t, this_t> *_arp, addr_t _addr
-    )
-        : data_link(_data_link), arp(_arp), addr(_addr)
+    ) : data_link(_data_link), arp(_arp), tcp(this), addr(_addr)
     {
     }
 
@@ -110,6 +116,7 @@ struct ipv4_t {
         data_link = _data_link;
         arp       = _arp;
         addr      = _addr;
+        tcp.init(this);
     }
 
     // Processes an IPv4 datagram wich starts at the given cursor (data-link
@@ -119,7 +126,7 @@ struct ipv4_t {
         size_t cursor_size = cursor.size();
 
         if (UNLIKELY(cursor_size < HEADERS_SIZE)) {
-            IPV4_DEBUG("Datagram ignored: too small to hold an IPv4 header");
+            IPV4_ERROR("Datagram ignored: too small to hold an IPv4 header");
             return;
         }
 
@@ -127,7 +134,7 @@ struct ipv4_t {
         [this, cursor_size](const struct iphdr *hdr, cursor_t payload) {
             #define IGNORE_DATAGRAM(WHY, ...)                                  \
                 do {                                                           \
-                    IPV4_DEBUG(                                                \
+                    IPV4_ERROR(                                                \
                         "Datagram from %s ignored: " WHY,                      \
                         addr_to_alpha(*((addr_t *) &hdr->saddr)),              \
                         ##__VA_ARGS__                                          \
@@ -176,10 +183,11 @@ struct ipv4_t {
             //
 
             if (hdr->protocol == IPPROTO_TCP) {
+                addr_t src = *((addr_t *) &hdr->saddr);
                 IPV4_DEBUG(
-                    "Receives an IPv4 datagram from %s",
-                    addr_to_alpha(*((addr_t *) &hdr->saddr))
+                    "Receives an IPv4 datagram from %s", addr_to_alpha(src)
                 );
+                this->tcp.receive_segment(src, payload);
             } else {
                 IGNORE_DATAGRAM(
                     "unknown IPv4 protocol (%u)", (unsigned int) hdr->protocol
@@ -213,7 +221,7 @@ struct ipv4_t {
             const data_link_addr_t *data_link_dst
         ) {
             if (data_link_dst == nullptr) {
-                IPV4_DEBUG("Unreachable address");
+                IPV4_ERROR("Unreachable address: %s", addr_to_alpha(dst));
                 return;
             }
 
@@ -289,6 +297,7 @@ private:
 
 #undef IPV4_COLOR
 #undef IPV4_DEBUG
+#undef IPV4_ERROR
 
 } } /* namespace tcp_mpipe::net */
 

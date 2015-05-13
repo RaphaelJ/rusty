@@ -16,7 +16,7 @@
 #include <arpa/inet.h>      // htons()
 #include <net/if_arp.h>     // ARPOP_REQUEST, ARPOP_REPLY
 
-#include "util/macros.hpp"
+#include "util/macros.hpp"      // TCP_MPIPE_*, COLOR_*
 
 using namespace std;
 
