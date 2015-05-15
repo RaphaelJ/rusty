@@ -9,14 +9,14 @@
 #include <cstdint>
 #include <cstring>
 
-#include <arpa/inet.h>
+#include "net/endian.hpp"   // net_t
 
-#include "checksum.hpp"
+#include "net/checksum.hpp"
 
 namespace tcp_mpipe {
 namespace net {
 
-uint16_t checksum(const void *data, size_t size)
+net_t<uint16_t> checksum(const void *data, size_t size)
 {
     // The checksum is the one's completent (e.g. binary not) of the 16 bits
     // one's complement sum of every pair of bytes (16 bits). If the data has an
@@ -85,7 +85,7 @@ uint16_t checksum(const void *data, size_t size)
 
     // Sums 32 bits at a time.
     while (size > sizeof (uint32_t)) {
-        sum += ntohl(*data32); // NOTE: 'ntohl()' doesn't seem to be required
+        sum += *data32; // NOTE: 'ntohl()' doesn't seem to be required
 
         data32++;
         size -= sizeof (uint32_t);
@@ -102,7 +102,9 @@ uint16_t checksum(const void *data, size_t size)
     while (sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
 
-    return htons(~sum);
+    net_t<uint16_t> sum_net;
+    sum_net.net = ~sum;
+    return sum_net;
 }
 
 } } /* namespace tcp_mpipe::net */

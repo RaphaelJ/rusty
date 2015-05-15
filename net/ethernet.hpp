@@ -16,6 +16,7 @@
 #include <netinet/ether.h>  // ether_ntoa
 
 #include "net/arp.hpp"      // arp_t
+#include "net/endian.hpp"   // net_t
 #include "net/ipv4.hpp"     // ipv4_t
 #include "util/macros.hpp"  // TCP_MPIPE_*, COLOR_*
 
@@ -29,8 +30,8 @@ namespace net {
     TCP_MPIPE_ERROR("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
-static const uint16_t ETHERTYPE_ARP_NET = htons(ETHERTYPE_ARP);
-static const uint16_t ETHERTYPE_IP_NET  = htons(ETHERTYPE_IP);
+static const net_t<uint16_t> ETHERTYPE_ARP_NET = ETHERTYPE_ARP;
+static const net_t<uint16_t> ETHERTYPE_IP_NET  = ETHERTYPE_IP;
 
 // Ethernet stack able to process frames from and to the specified physical
 // 'phys_t' layer.
@@ -47,7 +48,43 @@ struct ethernet_t {
     typedef ethernet_t<phys_t>              this_t;
 
     typedef typename phys_t::cursor_t       cursor_t;
-    typedef struct ether_addr               addr_t;
+
+    // Ethernet address.
+    struct addr_t {
+        uint8_t value[ETH_ALEN];
+
+        inline addr_t& operator=(addr_t other)
+        {
+            memcpy(&value, &other.value, sizeof value);
+            return *this;
+        }
+
+        friend inline bool operator==(addr_t a, addr_t b)
+        {
+            return !(a != b);
+        }
+
+        friend inline bool operator!=(addr_t a, addr_t b)
+        {
+            return memcmp(&a, &b, sizeof (addr_t));
+        }
+
+        // Converts the Ethernet address to the standard hex-digits-and-colons
+        // notation into a statically allocated buffer.
+        //
+        // This method is typically called for debugging messages.
+        static char *to_alpha(net_t<addr_t> addr)
+        {
+            return ether_ntoa((struct ether_addr *) &addr);
+        }
+    } __attribute__ ((__packed__));
+
+    struct header_t {
+        net_t<addr_t>   dhost;  // Destination Ethernet address.
+        net_t<addr_t>   shost;  // Source Ethernet address.
+        net_t<uint16_t> type;   // Ether-type.
+    } __attribute__ ((__packed__));
+
 
     // Upper network layers types.
     typedef ipv4_t<this_t>                  ipv4_ethernet_t;
@@ -57,20 +94,17 @@ struct ethernet_t {
     // Static fields
     //
 
-    static constexpr size_t   HEADERS_SIZE    = sizeof (ether_header);
+    static constexpr size_t   HEADER_SIZE     = sizeof (header_t);
 
     // 'arp_t' requires the following static fields:
     static constexpr uint16_t ARP_TYPE        = ARPHRD_ETHER;
     static constexpr size_t   ADDR_LEN        = ETH_ALEN;
-    static constexpr addr_t   BROADCAST_ADDR  =
-        { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
 
     //
     // Fields
     //
 
-    // Interface Ethernet address (in network byte order).
-    addr_t                          addr;
+    net_t<addr_t>                   addr;
 
     // Physical layer instance.
     phys_t                          *phys;
@@ -81,6 +115,9 @@ struct ethernet_t {
 
     // Maximum payload size. Doesn't change after intialization.
     size_t                          max_payload_size;
+
+    net_t<addr_t>                   BROADCAST_ADDR =
+        { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
 
     //
     // Methods
@@ -99,16 +136,18 @@ struct ethernet_t {
     // Does the same thing as creating the environment with 'ethernet_t()' and
     // then calling 'init()'.
     ethernet_t(
-        phys_t *_phys, addr_t _addr, typename ipv4_ethernet_t::addr_t ipv4_addr
+        phys_t *_phys, net_t<addr_t> _addr,
+        net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
     ) : phys(_phys), max_payload_size(_max_payload_size()), addr(_addr),
-        arp(this, ipv4_addr), ipv4(this, &arp, ipv4_addr)
+        arp(this, &ipv4), ipv4(this, &arp, ipv4_addr)
     {
     }
 
     // Initializes an Ethernet environment for the given physical layer
     // instance, Ethernet address and IPv4 address.
     void init(
-        phys_t *_phys, addr_t _addr, typename ipv4_ethernet_t::addr_t ipv4_addr
+        phys_t *_phys, net_t<addr_t> _addr,
+        net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
     )
     {
         phys             = _phys;
@@ -125,49 +164,42 @@ struct ethernet_t {
     // a packet.
     void receive_frame(cursor_t cursor)
     {
-        if (UNLIKELY(cursor.size() < HEADERS_SIZE)) {
+        if (UNLIKELY(cursor.size() < HEADER_SIZE)) {
             ETH_ERROR("Frame ignored: too small to hold an Ethernet header");
             return;
         }
 
-        cursor.template read_with<struct ether_header, void>(
-        [this](const struct ether_header *hdr, cursor_t payload) {
+        cursor.template read_with<header_t, void>(
+        [this](const header_t *hdr, cursor_t payload) {
             #define IGNORE_FRAME(WHY, ...)                                     \
                 do {                                                           \
                     ETH_ERROR(                                                 \
                         "Frame from %s ignored: " WHY,                         \
-                        addr_to_alpha(*((addr_t *) hdr->ether_shost)),         \
-                        ##__VA_ARGS__                                          \
+                        addr_t::to_alpha(hdr->shost), ##__VA_ARGS__            \
                     );                                                         \
                     return;                                                    \
                 } while (0)
 
-            static const addr_t broadcast_addr = BROADCAST_ADDR;
-
-            if (UNLIKELY(
-                   memcmp(&hdr->ether_dhost, &addr,           sizeof (addr_t))
-                && memcmp(&hdr->ether_dhost, &broadcast_addr, sizeof (addr_t))
-            ))
+            if (UNLIKELY(hdr->dhost != addr && hdr->dhost != BROADCAST_ADDR))
                 IGNORE_FRAME("bad recipient");
 
             #define RECEIVE_FRAME()                                            \
                 do {                                                           \
                     ETH_DEBUG(                                                 \
                         "Receives an Ethernet frame from %s",                  \
-                        addr_to_alpha(*((addr_t *) hdr->ether_shost))          \
+                        addr_t::to_alpha(hdr->shost)                           \
                     );                                                         \
                 } while (0)
 
-            if (hdr->ether_type == ETHERTYPE_ARP_NET) {
+            if (hdr->type == ETHERTYPE_ARP_NET) {
                 RECEIVE_FRAME();
                 arp.receive_message(payload);
-            } else if (hdr->ether_type == ETHERTYPE_IP_NET) {
+            } else if (hdr->type == ETHERTYPE_IP_NET) {
                 RECEIVE_FRAME();
                 ipv4.receive_datagram(payload);
             } else {
                 IGNORE_FRAME(
-                    "unknown Ethernet type (%" PRIu16 ")",
-                    ntohs(hdr->ether_type)
+                    "unknown Ethernet type (%" PRIu16 ")", hdr->type.host()
                 );
             }
 
@@ -179,20 +211,18 @@ struct ethernet_t {
     // Creates an Ethernet frame with the given destination and Ethernet type,
     // and writes its payload with the given 'payload_writer'. The frame is then
     // transmitted to physical layer.
-    //
-    // 'dst' and 'ether_type' must be in network byte order.
     void send_payload(
-        addr_t dst, uint16_t ether_type,
+        net_t<addr_t> dst, net_t<uint16_t> ether_type,
         size_t payload_size, function<void(cursor_t)> payload_writer
     )
     {
         assert(payload_size >= 0 && payload_size <= max_payload_size);
 
-        size_t frame_size = HEADERS_SIZE + payload_size;
+        size_t frame_size = HEADER_SIZE + payload_size;
 
         ETH_DEBUG(
             "Sends a %zu bytes ethernet frame to %s with type 0x%x",
-            frame_size, addr_to_alpha(dst), ntohs(ether_type)
+            frame_size, addr_t::to_alpha(dst), ether_type.host()
         );
 
         this->phys->send_packet(
@@ -210,7 +240,8 @@ struct ethernet_t {
     // This method is typically called by the ARP instance when it wants to send
     // a message.
     void send_arp_payload(
-        addr_t dst, size_t payload_size, function<void(cursor_t)> payload_writer
+        net_t<addr_t> dst, size_t payload_size,
+        function<void(cursor_t)> payload_writer
     )
     {
         send_payload(dst, ETHERTYPE_ARP_NET, payload_size, payload_writer);
@@ -222,41 +253,32 @@ struct ethernet_t {
     // This method is typically called by the IPv4 instance when it wants to
     // send a packet.
     void send_ip_payload(
-        addr_t dst, size_t payload_size, function<void(cursor_t)> payload_writer
+        net_t<addr_t> dst, size_t payload_size,
+        function<void(cursor_t)> payload_writer
     )
     {
         send_payload(dst, ETHERTYPE_IP_NET, payload_size, payload_writer);
     }
 
-    // Converts the Ethernet address to the standard hex-digits-and-colons
-    // notation into a statically allocated buffer.
-    //
-    // This method is typically called by the ARP instance for debugging
-    // messages.
-    static char *addr_to_alpha(addr_t addr)
-    {
-        return ether_ntoa(&addr);
-    }
-
 private:
 
     // Writes the Ethernet header starting at the given buffer cursor.
-    //
-    // 'dst' and 'ether_type' must be in network byte order.
-    cursor_t _write_header(cursor_t cursor, addr_t dst, uint16_t ether_type)
+    cursor_t _write_header(
+        cursor_t cursor, net_t<addr_t> dst, net_t<uint16_t> ether_type
+    )
     {
-        return cursor.template write_with<struct ether_header>(
-        [this, dst, ether_type](struct ether_header *hdr) {
-            mempcpy(&hdr->ether_dhost, &dst,  sizeof (addr_t));
-            mempcpy(&hdr->ether_shost, &addr, sizeof (addr_t));
-            hdr->ether_type = ether_type;
+        return cursor.template write_with<header_t >(
+        [this, dst, ether_type](header_t *hdr) {
+            hdr->dhost = dst;
+            hdr->shost = addr;
+            hdr->type  = ether_type;
         });
     }
 
     size_t _max_payload_size(void)
     {
         // NOTE: doesn't support Jumbo frames.
-        return min<size_t>(this->phys->max_packet_size - HEADERS_SIZE, 1500);
+        return min<size_t>(this->phys->max_packet_size - HEADER_SIZE, 1500);
     }
 };
 

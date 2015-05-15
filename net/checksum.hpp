@@ -10,6 +10,8 @@
 
 #include <cstdint>
 
+#include "net/endian.hpp"   // net_t
+
 namespace tcp_mpipe {
 namespace net {
 
@@ -20,11 +22,11 @@ namespace net {
 //
 // See [1] for the complete Internet checksum specification.
 //
-// The buffer is excpected to be given in network byte order.
+// The buffer is expected to be given in network byte order.
 // The returned 16 bits checksum will be in network byte order.
 //
 // [1]: http://tools.ietf.org/html/rfc1071
-uint16_t checksum(const void *data, size_t size);
+net_t<uint16_t> checksum(const void *data, size_t size);
 
 } } /* namespace tcp_mpipe::net */
 

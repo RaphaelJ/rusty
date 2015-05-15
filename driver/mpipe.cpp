@@ -14,13 +14,14 @@
 #include <cstdlib>
 #include <functional>
 
-#include <gxio/mpipe.h>     // gxio_mpipe_*
-#include <net/ethernet.h>   // struct ether_addr
-#include <tmc/alloc.h>      // tmc_alloc_map, tmc_alloc_set_home,
-                            // tmc_alloc_set_pagesize.
+#include <gxio/mpipe.h>         // gxio_mpipe_*
+#include <net/ethernet.h>       // struct ether_addr
+#include <tmc/alloc.h>          // tmc_alloc_map, tmc_alloc_set_home,
+                                // tmc_alloc_set_pagesize.
 
-#include "driver/driver.hpp"
-#include "net/ethernet.hpp"
+#include "driver/driver.hpp"    // VERIFY_ERRNO, VERIFY_GXIO
+#include "net/endian.hpp"       // net_t
+#include "net/ethernet.hpp"     // ethernet_t
 
 #include "driver/mpipe.hpp"
 
@@ -33,7 +34,7 @@ namespace driver {
 
 // Returns the hardware address of the link related to the given mPIPE
 // environment (in network byte order).
-static struct ether_addr _ether_addr(gxio_mpipe_link_t *link);
+static net_t<ethernet_t<mpipe_t>::addr_t> _ether_addr(gxio_mpipe_link_t *link);
 
 // The NotifRing is being part of a single unique NotifGroup. One single bucket
 // is mapped to this NotifGroup.
@@ -47,7 +48,7 @@ static struct ether_addr _ether_addr(gxio_mpipe_link_t *link);
 // mpipe_env_t so the structure can be efficiently allocated by the caller
 // (i.e. on the Tile's cache of the tile which uses the iqueue and equeue
 // wrappers).
-mpipe_t::mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr)
+mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
 {
     int result;
 
@@ -495,22 +496,24 @@ gxio_mpipe_bdesc_t mpipe_t::_alloc_buffer(size_t size)
     DRIVER_DIE("No buffer is sufficiently large to hold the requested size.");
 }
 
-static struct ether_addr _ether_addr(gxio_mpipe_link_t *link)
+static net_t<ethernet_t<mpipe_t>::addr_t> _ether_addr(gxio_mpipe_link_t *link)
 {
-    int64_t addr = gxio_mpipe_link_get_attr(link, GXIO_MPIPE_LINK_MAC);
+    int64_t addr64 = gxio_mpipe_link_get_attr(link, GXIO_MPIPE_LINK_MAC);
 
     // Address is in the 48 least-significant bits.
-    assert((addr & 0xFFFFFFFFFFFF) == addr);
+    assert((addr64 & 0xFFFFFFFFFFFF) == addr64);
 
-    return { {
-            (uint8_t) (addr >> 40),
-            (uint8_t) (addr >> 32),
-            (uint8_t) (addr >> 24),
-            (uint8_t) (addr >> 16),
-            (uint8_t) (addr >> 8),
-            (uint8_t) addr
-        }
+    // Immediatly returns the address in network byte order.
+    net_t<ethernet_t<mpipe_t>::addr_t> addr;
+    addr.net = {
+        (uint8_t) (addr64 >> 40),
+        (uint8_t) (addr64 >> 32),
+        (uint8_t) (addr64 >> 24),
+        (uint8_t) (addr64 >> 16),
+        (uint8_t) (addr64 >> 8),
+        (uint8_t) addr64
     };
+    return addr;
 }
 
 } } /* namespace tcp_mpipe::driver */

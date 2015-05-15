@@ -16,8 +16,9 @@
 
 #include <gxio/mpipe.h>         // gxio_mpipe_*, GXIO_MPIPE_*
 
-#include "driver/buffer.hpp"
-#include "net/ethernet.hpp"
+#include "driver/buffer.hpp"    // cursor_t
+#include "net/endian.hpp"       // net_t
+#include "net/ethernet.hpp"     // ethernet_t
 
 using namespace std;
 
@@ -165,7 +166,7 @@ struct mpipe_t {
     // Starts the mPIPE driver, allocates a NotifRing and its iqueue wrapper, an
     // eDMA ring with its equeue wrapper and a set of buffer stacks with their
     // buffers.
-    mpipe_t(const char *link_name, ipv4_mpipe_t::addr_t ipv4_addr);
+    mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr);
 
     // Starts an infite polling loop on the ingress queue.
     //

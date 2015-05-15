@@ -19,12 +19,15 @@
 #include "driver/cpu.hpp"
 #include "driver/mpipe.hpp"
 #include "net/arp.hpp"
+#include "net/endian.hpp"
 #include "net/ethernet.hpp"
+#include "net/ipv4.hpp"
 #include "util/macros.hpp"
 
 using namespace std;
 
 using namespace tcp_mpipe::driver;
+using namespace tcp_mpipe::net;
 using namespace tcp_mpipe::utils;
 
 #define MAIN_COLOR     COLOR_GRN
@@ -33,8 +36,8 @@ using namespace tcp_mpipe::utils;
 
 // Parsed CLI arguments.
 struct args_t {
-    char            *link_name;
-    struct in_addr  ipv4_addr;
+    char                *link_name;
+    net_t<ipv4_addr_t>  ipv4_addr;
 };
 
 static void _print_usage(char **argv);
@@ -53,8 +56,9 @@ int main(int argc, char **argv)
 
     MAIN_DEBUG(
         "Starts the mPIPE driver interface %s (%s) with %s as IPv4 address",
-        args.link_name, ether_ntoa(&(mpipe.data_link.addr)),
-        inet_ntoa(args.ipv4_addr)
+        args.link_name,
+        ethernet_t<mpipe_t>::addr_t::to_alpha(mpipe.data_link.addr),
+        ipv4_t<ethernet_t<mpipe_t>>::addr_t::to_alpha(args.ipv4_addr)
     );
 
     sleep(2);
@@ -98,11 +102,13 @@ static bool _parse_args(int argc, char **argv, args_t *args)
 
     args->link_name = argv[1];
 
-    if (inet_aton(argv[2], &(args->ipv4_addr)) != 1) {
+    struct in_addr in_addr;
+    if (inet_aton(argv[2], &in_addr) != 1) {
         fprintf(stderr, "Failed to parse the IPv4.\n");
         _print_usage(argv);
         return false;
     }
+    args->ipv4_addr = ipv4_addr_t::from_in_addr(in_addr);
 
     return true;
 }
