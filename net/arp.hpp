@@ -82,15 +82,14 @@ struct arp_t {
     proto_t                                                     *proto;
 
     // Contains mapping/cache of known protocol addresses to their data-link
-    // addresses (both in network byte order).
+    // addresses.
     //
     // The set of known protocol addresses is disjoint with the set of addresses
     // in 'pending_reqs'.
     unordered_map<net_t<proto_addr_t>, net_t<data_link_addr_t>> addrs_cache;
 
-    // Contains a mapping of protocol addresses (in network byte order) for
-    // which an ARP request has been broadcasted but no response has been
-    // received yet.
+    // Contains a mapping of protocol addresses for which an ARP request has
+    // been broadcasted but no response has been received yet.
     // The value contains a vector of functions which must be called once the
     // ARP reply is received.
     //
@@ -254,8 +253,8 @@ struct arp_t {
         );
     }
 
-    // Executes the given callback function by giving the data-link address (in
-    // network byte order) corresponding to the given protocol address address.
+    // Executes the given callback function by giving the data-link address
+    // corresponding to the given protocol address address.
     //
     // The callback will receive a 'nullptr' as 'data_link_addr_t' if the
     // address is unreachable.
@@ -396,8 +395,6 @@ private:
     }
 
     // Writes the ARP message after the given buffer cursor.
-    //
-    // 'op', 'tha' and 'tpa' must be in network byte order.
     //
     // NOTE: inline ?
     cursor_t _write_message(
