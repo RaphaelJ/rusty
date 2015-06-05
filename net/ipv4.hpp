@@ -96,7 +96,7 @@ struct ipv4_t {
             uint8_t version:4;
             uint8_t ihl:4;
         #else
-            #error "Please fix <bits/endian.h>"
+            #error "Please fix __BYTE_ORDER in <bits/endian.h>"
         #endif
 
         uint8_t         tos;
@@ -105,7 +105,7 @@ struct ipv4_t {
         net_t<uint16_t> frag_off;
         uint8_t         ttl;
         uint8_t         protocol;
-        net_t<uint16_t> check;
+        net_t<uint16_t> check;          // checksum
         net_t<addr_t>   saddr;
         net_t<addr_t>   daddr;
     } __attribute__ ((__packed__));

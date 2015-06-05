@@ -85,7 +85,6 @@ struct ethernet_t {
         net_t<uint16_t> type;   // Ether-type.
     } __attribute__ ((__packed__));
 
-
     // Upper network layers types.
     typedef ipv4_t<this_t>                  ipv4_ethernet_t;
     typedef arp_t<this_t, ipv4_ethernet_t>  arp_ethernet_ipv4_t;
