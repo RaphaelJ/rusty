@@ -1,8 +1,8 @@
 //
+// Defines a C++ STL allocator which wraps the TMC memory management library.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Defines a C++ STL allocator which wraps the TMC memory management library.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

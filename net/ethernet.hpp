@@ -1,8 +1,8 @@
 //
+// Provides functions to receive and send Ethernet frames.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Provides functions to receive and send Ethernet frames.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

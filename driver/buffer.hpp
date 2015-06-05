@@ -1,8 +1,8 @@
 //
+// Provides an higher level interface to mPIPE buffers.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Provides an higher level interface to mPIPE buffers.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

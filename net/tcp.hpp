@@ -1,8 +1,8 @@
 //
+// Provides functions to receive and send TCP segments.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Provides functions to receive and send TCP segments.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

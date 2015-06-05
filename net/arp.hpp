@@ -1,8 +1,8 @@
 //
+// Manages ARP requests and responses.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Manages ARP requests and responses.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

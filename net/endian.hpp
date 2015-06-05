@@ -1,8 +1,8 @@
 //
+// Provides a template for type-safe network byte order types.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Provides a template for type-safe network byte order types.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by

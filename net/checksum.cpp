@@ -1,8 +1,8 @@
 //
+// Computes a checksum required by IPv4 and TCP protocols.
+//
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
-//
-// Computes a checksum required by IPv4 and TCP protocols.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
