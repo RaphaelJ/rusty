@@ -30,8 +30,8 @@
 
 #include <gxio/mpipe.h>         // gxio_mpipe_*
 #include <net/ethernet.h>       // struct ether_addr
-#include <tmc/alloc.h>          // tmc_alloc_map, tmc_alloc_set_home,
-                                // tmc_alloc_set_pagesize.
+#include <tmc/alloc.h>          // tmc_alloc_map(), tmc_alloc_set_home(),
+                                // tmc_alloc_set_pagesize().
 
 #include "driver/driver.hpp"    // VERIFY_ERRNO, VERIFY_GXIO
 #include "net/endian.hpp"       // net_t

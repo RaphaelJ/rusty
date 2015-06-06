@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_UTILS_ALLOCATOR_HPP__
-#define __TCP_MPIPE_UTILS_ALLOCATOR_HPP__
+#ifndef __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__
+#define __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__
 
 #include <memory>
 
@@ -31,8 +31,7 @@
 using namespace std;
 
 namespace tcp_mpipe {
-namespace utils {
-namespace tile_allocator {
+namespace driver {
 
 // Allocator which will use the provided 'tmc_alloc_t' configuration to allocate
 // an heap on which it will be able to allocate data.
@@ -164,6 +163,6 @@ private:
     }
 };
 
-} } } /* namespace tcp_mpipe::utils:: */
+} } /* namespace tcp_mpipe::driver */
 
-#endif /* __TCP_MPIPE_UTILS_ALLOCATOR_HPP__ */
+#endif /* __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__ */

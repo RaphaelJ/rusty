@@ -41,12 +41,12 @@ namespace net {
 
 // TCP Control Block unique identifier.
 //
-// Each TCP connection is uniquely identified by the 4-tuple
-// (remote address, remote port, local address, local port).
+// Each TCP connection is uniquely identified by the 4-tuple (remote address,
+// remote port, local address, local port).
 //
-// As the destination address is unique for this TCP instance, each TCP
-// Control Block can be uniquely identified using the 3-tuple
-// (remote address, remote port, local port).
+// As the destination address is unique for a TCP instance, each TCP Control
+// Block can be uniquely identified using the 3-tuple (remote address, 
+// remote port, local port).
 template <typename addr_t, typename port_t>
 struct tcp_tcb_id_t {
     addr_t  raddr;                      // Remote address
@@ -233,7 +233,6 @@ namespace std {
 // identifiers to be used in unordered containers.
 
 using namespace tcp_mpipe::net;
-
 
 template <>
 template <typename addr_t, typename port_t>

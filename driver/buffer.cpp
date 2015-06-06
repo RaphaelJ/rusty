@@ -20,7 +20,7 @@
 
 #include <cstdint>
 
-#include <gxio/mpipe.h> // MPIPE_EDMA_DESC_*
+#include <gxio/mpipe.h>         // MPIPE_EDMA_DESC_*
 
 #include "driver/driver.hpp"
 

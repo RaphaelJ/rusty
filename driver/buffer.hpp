@@ -25,7 +25,7 @@
 #include <cstring>
 #include <functional>
 
-#include <gxio/mpipe.h> // gxio_mpipe_*
+#include <gxio/mpipe.h>     // gxio_mpipe_*
 
 #include "util/macros.hpp"
 

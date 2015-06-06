@@ -30,6 +30,6 @@ namespace cpu {
 // Fails if there is less than n + 1 dataplane Tiles.
 void bind_to_dataplane(unsigned int n);
 
-} } } /* namespace tcp_mpipe::drivers:cpu */
+} } } /* namespace tcp_mpipe::driver:cpu */
 
 #endif /* __TCP_MPIPE_DRIVERS_CPU_HPP__ */

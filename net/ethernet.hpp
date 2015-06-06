@@ -26,7 +26,7 @@
 #include <functional>
 
 #include <net/ethernet.h>   // ether_addr, ETHERTYPE_*
-#include <netinet/ether.h>  // ether_ntoa
+#include <netinet/ether.h>  // ether_ntoa()
 
 #include "net/arp.hpp"      // arp_t
 #include "net/endian.hpp"   // net_t

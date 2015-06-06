@@ -25,13 +25,13 @@
 #include <functional>           // equal_to, hash
 #include <vector>
 
-#include <arpa/inet.h>          // inet_ntoa
+#include <arpa/inet.h>          // inet_ntoa()
 #include <net/ethernet.h>       // ETHERTYPE_IP
 #include <netinet/in.h>         // in_addr, IPPROTO_TCP
 #include <netinet/ip.h>         // IPDEFTTL, IPVERSION, IP_MF, IPPROTO_TCP,
                                 // IPTOS_CLASS_DEFAULT
 
-#include "net/checksum.hpp"     // checksum
+#include "net/checksum.hpp"     // checksum()
 #include "net/tcp.hpp"          // tcp_t
 #include "util/macros.hpp"      // TCP_MPIPE_*, COLOR_*
 

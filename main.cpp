@@ -25,12 +25,10 @@
 #include <netinet/in.h>     // in_addr
 #include <netinet/ether.h>  // ether_ntoa()
 
-// NOTE: To remove and put in mpipe.cpp
-#include <gxio/mpipe.h>     // gxio_mpipe_*, GXIO_MPIPE_*
-
 #include "driver/allocator.hpp"
 #include "driver/cpu.hpp"
 #include "driver/mpipe.hpp"
+#include "driver/timer.hpp"
 #include "net/arp.hpp"
 #include "net/endian.hpp"
 #include "net/ethernet.hpp"
@@ -41,7 +39,6 @@ using namespace std;
 
 using namespace tcp_mpipe::driver;
 using namespace tcp_mpipe::net;
-using namespace tcp_mpipe::utils;
 
 #define MAIN_COLOR     COLOR_GRN
 #define MAIN_DEBUG(MSG, ...)                                                   \
@@ -74,24 +71,25 @@ int main(int argc, char **argv)
         ipv4_t<ethernet_t<mpipe_t>>::addr_t::to_alpha(args.ipv4_addr)
     );
 
-    sleep(2);
+    // Tests the allocator.
+    tile_allocator_t<int> allocator();
 
+    // Tests the timer.
+    timer_manager_t timers;
+
+    {
+        bool triggered = false;
+
+        timers.schedule(10000000, [&triggered] {
+            triggered = true;
+        });
+
+        while (!triggered)
+            timers.tick();
+    }
+
+    // Runs the application.
     mpipe.run();
-
-    tile_allocator::tile_allocator_t<int> allocator();
-
-//     struct in_addr dest;
-//     inet_aton("10.0.2.1", &dest);
-//     arp::with_ether_addr(
-//         &arp_env, dest, [=](struct ether_addr addr) {
-//             MAIN_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
-//         }
-//     );
-//     arp::with_ether_addr(
-//         &arp_env, dest, [=](struct ether_addr addr) {
-//             MAIN_DEBUG("10.0.2.1 is %s", ether_ntoa(&addr));
-//         }
-//     );
 
     mpipe.close();
 

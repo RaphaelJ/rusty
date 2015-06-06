@@ -21,6 +21,7 @@
 #ifndef __TCP_MPIPE_NET_ARP_HPP__
 #define __TCP_MPIPE_NET_ARP_HPP__
 
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <unordered_map>
@@ -79,13 +80,6 @@ struct arp_t {
     typedef function<void(const net_t<data_link_addr_t> *)> callback_t;
 
     //
-    // Static fields
-    //
-
-    const net_t<uint16_t> DATA_LINK_TYPE_NET    = data_link_t::ARP_TYPE;
-    const net_t<uint16_t> PROTO_TYPE_NET        = proto_t::ARP_TYPE;
-
-    //
     // Fields
     //
 
@@ -93,6 +87,9 @@ struct arp_t {
     data_link_t                                                 *data_link;
     // Protocol layer instance.
     proto_t                                                     *proto;
+
+    const net_t<uint16_t> DATA_LINK_TYPE_NET    = data_link_t::ARP_TYPE;
+    const net_t<uint16_t> PROTO_TYPE_NET        = proto_t::ARP_TYPE;
 
     // Contains mapping/cache of known protocol addresses to their data-link
     // addresses.
