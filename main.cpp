@@ -80,7 +80,7 @@ int main(int argc, char **argv)
     {
         bool triggered = false;
 
-        timers.schedule(10000000, [&triggered] {
+        timers.schedule(1000000, [&triggered] {
             triggered = true;
         });
 
