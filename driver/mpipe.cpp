@@ -415,9 +415,17 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
 
 void mpipe_t::run(void)
 {
+    // Polling loop over the packet queue. Tries to executes timers between
+    // polling attempts.
+
     while (1) {
+        timers.tick();
+
         gxio_mpipe_idesc_t idesc;
-        gxio_mpipe_iqueue_get(&this->iqueue, &idesc);
+        int ret = gxio_mpipe_iqueue_try_get(&this->iqueue, &idesc);
+
+        if (ret == GXIO_MPIPE_ERR_IQUEUE_EMPTY) // Queue is empty. Retries.
+            continue;
 
         if (gxio_mpipe_iqueue_drop_if_bad(&this->iqueue, &idesc)) {
             DRIVER_DEBUG("Invalid packet dropped");

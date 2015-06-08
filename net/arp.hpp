@@ -467,6 +467,9 @@ private:
     // Doesn't unschedule the timer.
     void _remove_cache_entry(net_t<proto_addr_t> addr)
     {
+        ARP_DEBUG(
+            "Removes cache entry for %s", proto_t::addr_t::to_alpha(addr)
+        );
         addrs_cache.erase(addr);
     }
 
