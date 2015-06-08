@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <map>
 #include <unordered_map>
+#include <utility>              // move()
 
 #include <arch/cycle.h>         // get_cycle_count()
 
@@ -33,28 +34,35 @@
 
 namespace tcp_mpipe {
 namespace driver {
+namespace timer {
 
 void timer_manager_t::tick(void)
 {
-    // Iterates expired timers, executes them and removes them.
+    timer_manager_t::timers_t::const_iterator it;
 
-    auto it = timers.begin();
-    while (it != timers.end()) {
+    while ((it = timers.begin()) != timers.end()) {
+        // Removes the timer before calling it as some callbacks could make
+        // calls to 'schedule()' or 'remove()' and change the 'timers' member
+        // field.
+        // Similarly, the loop call 'timers.begin()' at each iteration as the
+        // iterator could be invalidated.
+
         cycles_t current_count = get_cycle_count();
-
         if (it->first > current_count)
             break;
 
         DRIVER_DEBUG("Executes timer %" PRIu64, it->first);
-        it->second();
 
-        it = timers.erase(it); // TODO: removes a batch of timers in one call
-                               // for performances.
+        function<void(void)> f = move(it->second);
+        timers.erase(it);
+
+        f(); // Could invalidate 'it'.
     }
 }
 
-timer_manager_t::timer_id_t
-timer_manager_t::schedule(uint64_t delay, const function<void()>& f)
+timer_manager_t::timer_id_t timer_manager_t::schedule(
+    timer_manager_t::delay_t delay, const function<void()>& f
+)
 {
     timer_manager_t::cycles_t expire =
         get_cycle_count() + CYCLES_PER_SECOND * delay / 1000000;
@@ -83,4 +91,4 @@ bool timer_manager_t::remove(timer_manager_t::timer_id_t timer_id)
     return timers.erase(timer_id);
 }
 
-} } /* namespace tcp_mpipe::driver */
+} } } /* namespace tcp_mpipe::driver::timer */

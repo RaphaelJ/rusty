@@ -405,7 +405,7 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
     //
 
     {
-        data_link.init(this, _ether_addr(&this->link), ipv4_addr);
+        data_link.init(this, &timers, _ether_addr(&this->link), ipv4_addr);
 
         max_packet_size = this->buffer_stacks.back().buffer_size;
 

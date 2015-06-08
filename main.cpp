@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     tile_allocator_t<int> allocator();
 
     // Tests the timer.
-    timer_manager_t timers;
+    timer::timer_manager_t timers;
 
     {
         bool triggered = false;

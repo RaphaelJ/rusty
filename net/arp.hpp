@@ -26,6 +26,7 @@
 #include <functional>
 #include <unordered_map>
 #include <vector>
+#include <utility>          // move()
 
 #include <net/if_arp.h>     // ARPOP_REQUEST, ARPOP_REPLY
 
@@ -55,10 +56,13 @@ struct arp_t {
     // Member types
     //
 
-    typedef typename data_link_t::cursor_t  cursor_t;
+    typedef typename data_link_t::cursor_t          cursor_t;
+    typedef typename data_link_t::timer_manager_t   timer_manager_t;
+    typedef typename timer_manager_t::timer_id_t    timer_id_t;
+    typedef typename timer_manager_t::delay_t       delay_t;
 
-    typedef typename data_link_t::addr_t    data_link_addr_t;
-    typedef typename proto_t::addr_t        proto_addr_t;
+    typedef typename data_link_t::addr_t            data_link_addr_t;
+    typedef typename proto_t::addr_t                proto_addr_t;
 
     struct message_t {
         struct header_t {                   // fixed-size header
@@ -76,27 +80,55 @@ struct arp_t {
         net_t<proto_addr_t>        tpa;     // target protocol address
     } __attribute__((__packed__));
 
+    struct cache_entry_t {
+        net_t<data_link_addr_t> addr;
+
+        // Timer which triggers the expiration of the entry.
+        timer_id_t              timer;
+    };
+
     // Callback used in the call of 'with_data_link_addr()'.
     typedef function<void(const net_t<data_link_addr_t> *)> callback_t;
+
+    struct pending_entry_t {
+        vector<callback_t>  callbacks;
+
+        // Timer which triggers the expiration of resolution.
+        timer_id_t          timer;
+    };
+
+    //
+    // Static fields
+    //
+
+    // Delay in microseconds (10^-6) before an ARP table entry will be removed.
+    static constexpr delay_t    ENTRY_TIMEOUT   = 3600L * 1000000L;
+
+    // Delay in microseconds (10^-6) to wait for an ARP resolution response.
+    static constexpr delay_t    REQUEST_TIMEOUT = 5L * 1000000L;
 
     //
     // Fields
     //
 
     // Data-link layer instance.
-    data_link_t                                                 *data_link;
-    // Protocol layer instance.
-    proto_t                                                     *proto;
+    data_link_t             *data_link;
 
-    const net_t<uint16_t> DATA_LINK_TYPE_NET    = data_link_t::ARP_TYPE;
-    const net_t<uint16_t> PROTO_TYPE_NET        = proto_t::ARP_TYPE;
+    timer_manager_t         *timers;
+
+    // Protocol layer instance.
+    proto_t                 *proto;
+
+
+    const net_t<uint16_t>   DATA_LINK_TYPE_NET  = data_link_t::ARP_TYPE;
+    const net_t<uint16_t>   PROTO_TYPE_NET      = proto_t::ARP_TYPE;
 
     // Contains mapping/cache of known protocol addresses to their data-link
     // addresses.
     //
     // The set of known protocol addresses is disjoint with the set of addresses
     // in 'pending_reqs'.
-    unordered_map<net_t<proto_addr_t>, net_t<data_link_addr_t>> addrs_cache;
+    unordered_map<net_t<proto_addr_t>, cache_entry_t>   addrs_cache;
 
     // Contains a mapping of protocol addresses for which an ARP request has
     // been broadcasted but no response has been received yet.
@@ -105,7 +137,7 @@ struct arp_t {
     //
     // The set of pending protocol addresses is disjoint with the set of
     // addresses in 'addrs_cache'.
-    unordered_map<net_t<proto_addr_t>, vector<callback_t>>      pending_reqs;
+    unordered_map<net_t<proto_addr_t>, pending_entry_t> pending_reqs;
 
     //
     // Methods
@@ -123,16 +155,19 @@ struct arp_t {
     //
     // Does the same thing as creating the environment with 'arp_t()' and then
     // calling 'init()'.
-    arp_t(data_link_t *_data_link, proto_t *_proto)
-        : data_link(_data_link), proto(_proto)
+    arp_t(data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto)
+        : data_link(_data_link), timers(_timers), proto(_proto)
     {
     }
 
     // Initializes an ARP environment for the given data-link and protocol layer
     // instances.ipv4
-    void init(data_link_t *_data_link, proto_t *_proto)
+    void init(
+        data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto
+    )
     {
         data_link = _data_link;
+        timers    = _timers;
         proto     = _proto;
     }
 
@@ -297,7 +332,7 @@ struct arp_t {
             // Hardware address is cached.
 
             // unlock
-            callback(&it->second);
+            callback(&it->second.addr);
             return true;
         } else {
             // Hardware address is NOT cached.
@@ -346,23 +381,37 @@ private:
 
         // lock
 
-        auto p = this->addrs_cache.insert({ proto_addr, data_link_addr });
+        // Schedules a timer to remove the entry after ENTRY_TIMEOUT.
+        timer_id_t timer_id = timers->schedule(
+            ENTRY_TIMEOUT, [this, proto_addr]()
+            {
+                _remove_cache_entry(proto_addr);
+            }
+        );
 
-        if (!p.second) {
+        cache_entry_t entry = { data_link_addr, timer_id };
+        auto inserted = this->addrs_cache.insert({ proto_addr, entry });
+
+        if (!inserted.second) {
             // Address already in cache, replace the previous value if
             // different.
 
-            net_t<data_link_addr_t> *old_addr = &p.first->second;
+            cache_entry_t *inserted_entry = &inserted.first->second;
 
-            if (UNLIKELY(*old_addr != data_link_addr)) {
+            if (UNLIKELY(inserted_entry->addr != data_link_addr)) {
                 ARP_DEBUG(
                     "Updates %s cache entry to %s (was %s)",
                     proto_t::addr_t::to_alpha(proto_addr),
                     data_link_t::addr_t::to_alpha(data_link_addr),
-                    data_link_t::addr_t::to_alpha(*old_addr)
+                    data_link_t::addr_t::to_alpha(inserted_entry->addr)
                 );
-                *old_addr = data_link_addr;
+                inserted_entry->addr = data_link_addr;
             }
+
+            // Replaces the old timeout.
+
+            timers->remove(inserted_entry->timer);
+            inserted_entry->timer = entry.timer;
 
             // unlock
         } else {
@@ -378,13 +427,18 @@ private:
 
             if (it != this->pending_reqs.end()) {
                 // The address has pending requests.
-                //
+
+                pending_entry_t *pending_entry = &it->second;
+
+                // Removes the request timeout.
+                timers->remove(pending_entry->timer);
+
                 // As it's possible that one of these callbacks induce a new
                 // lookup to the ARP cache for the same address, and thus a
                 // deadlock, we must first remove the pending requests entry and
                 // free the lock before calling any callback.
 
-                vector<callback_t> callbacks = move(it->second);
+                vector<callback_t> callbacks = move(pending_entry->callbacks);
                 this->pending_reqs.erase(it);
 
                 // unlock
@@ -395,13 +449,25 @@ private:
                     proto_t::addr_t::to_alpha(proto_addr)
                 );
 
+                // Executes the callbacks.
+
                 for (callback_t& callback : callbacks)
                     callback(&data_link_addr);
             } else {
                 // No pending request.
+                // Occurs when the addres has not been requested.
+
                 // unlock
             }
         }
+    }
+
+    // Removes the cache entry for the given protocol address.
+    //
+    // Doesn't unschedule the timer.
+    void _remove_cache_entry(net_t<proto_addr_t> addr)
+    {
+        addrs_cache.erase(addr);
     }
 
     // Writes the ARP message after the given buffer cursor.

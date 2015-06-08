@@ -31,20 +31,25 @@ using namespace std;
 
 namespace tcp_mpipe {
 namespace driver {
+namespace timer {
 
 // Manages timers using uses the CPU's cycle counter.
 //
 // The 'tick()' method should be called periodically to execute expired timers.
 //
 // The manager is *not* thread-safe. Users must avoid concurrent calls to
-// 'tick()', 'schedule()' and 'remove()'.
+// 'tick()', 'schedule()' and 'remove()'. Calling 'schedule()' or 'remove()'
+// within a timer should be safe.
 struct timer_manager_t {
     //
     // Member types
     //
 
     // CPU cycle counter value.
-    typedef uint64_t                cycles_t;
+    typedef uint64_t                        cycles_t;
+
+    // Timer delay in microseconds (10^-6).
+    typedef uint64_t                        delay_t;
 
     // Timers are stored by the cycle counter value for which they will expire.
     //
@@ -62,7 +67,7 @@ struct timer_manager_t {
 
     // The 'destroy()' method uses the timer expiration date to retrieve and
     // remove a timer.
-    typedef cycles_t                timer_id_t;
+    typedef cycles_t                        timer_id_t;
 
     //
     // Static fields
@@ -84,10 +89,10 @@ struct timer_manager_t {
     // Executes expired timers. This method should be called periodically.
     void tick(void);
 
-    // Registers a timer with a delay in microseconds (10^−6) and a function.
+    // Registers a timer with a delay in microseconds (10^-6) and a function.
     //
     // The timer will only be executed once.
-    timer_id_t schedule(uint64_t delay, const function<void()>& f);
+    timer_id_t schedule(delay_t delay, const function<void()>& f);
 
     // Unschedules a timer by the identifier that has been returned by the
     // 'schedule()' call.
@@ -97,6 +102,6 @@ struct timer_manager_t {
     bool remove(timer_id_t timer_id);
 };
 
-} } /* namespace tcp_mpipe::driver */
+} } } /* namespace tcp_mpipe::driver::timer */
 
 #endif /* __TCP_MPIPE_DRIVER_TIMER_HPP__ */

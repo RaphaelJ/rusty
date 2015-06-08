@@ -58,9 +58,10 @@ struct ethernet_t {
     // Member types
     //
 
-    typedef ethernet_t<phys_t>              this_t;
+    typedef ethernet_t<phys_t>                  this_t;
 
-    typedef typename phys_t::cursor_t       cursor_t;
+    typedef typename phys_t::cursor_t           cursor_t;
+    typedef typename phys_t::timer_manager_t    timer_manager_t;
 
     // Ethernet address.
     struct addr_t {
@@ -148,24 +149,24 @@ struct ethernet_t {
     // Does the same thing as creating the environment with 'ethernet_t()' and
     // then calling 'init()'.
     ethernet_t(
-        phys_t *_phys, net_t<addr_t> _addr,
+        phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
         net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
-    ) : phys(_phys), max_payload_size(_max_payload_size()), addr(_addr),
-        arp(this, &ipv4), ipv4(this, &arp, ipv4_addr)
+    ) : phys(_phys), max_payload_size(_max_payload_size()),
+        addr(_addr), arp(this, &ipv4), ipv4(this, &arp, ipv4_addr)
     {
     }
 
     // Initializes an Ethernet environment for the given physical layer
     // instance, Ethernet address and IPv4 address.
     void init(
-        phys_t *_phys, net_t<addr_t> _addr,
+        phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
         net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
     )
     {
         phys             = _phys;
         max_payload_size = _max_payload_size();
         addr             = _addr;
-        arp.init(this, &ipv4);
+        arp.init(this, _timers, &ipv4);
         ipv4.init(this, &arp, ipv4_addr);
     }
 
@@ -238,12 +239,11 @@ struct ethernet_t {
         );
 
         this->phys->send_packet(
-            frame_size,
-            [this, dst, ether_type, &payload_writer](cursor_t cursor) {
-                cursor = _write_header(cursor, dst, ether_type);
-                payload_writer(cursor);
-            }
-        );
+        frame_size,
+        [this, dst, ether_type, &payload_writer](cursor_t cursor) {
+            cursor = _write_header(cursor, dst, ether_type);
+            payload_writer(cursor);
+        });
     }
 
     // Equivalent to 'send_payload()' with 'ether_type' equals to

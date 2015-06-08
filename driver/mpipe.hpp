@@ -30,6 +30,7 @@
 #include <gxio/mpipe.h>         // gxio_mpipe_*, GXIO_MPIPE_*
 
 #include "driver/buffer.hpp"    // cursor_t
+#include "driver/timer.hpp"     // timer_manager_t
 #include "net/endian.hpp"       // net_t
 #include "net/ethernet.hpp"     // ethernet_t
 
@@ -112,13 +113,11 @@ struct mpipe_t {
     // and write to memory in mPIPE buffers.
     typedef buffer::cursor_t                    cursor_t;
 
+    typedef timer::timer_manager_t              timer_manager_t;
+
     // Upper network layers types.
     typedef ethernet_t<mpipe_t>                 ethernet_mpipe_t;
     typedef ethernet_mpipe_t::ipv4_ethernet_t   ipv4_mpipe_t;
-
-    //
-    // Static fields
-    //
 
     //
     // Fields
@@ -164,6 +163,8 @@ struct mpipe_t {
 
     // Rules
     gxio_mpipe_rules_t      rules;
+
+    timer_manager_t         timers;
 
     // Upper (Ethernet) data-link layer.
     ethernet_t<mpipe_t>     data_link;
