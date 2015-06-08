@@ -525,7 +525,7 @@ static net_t<ethernet_t<mpipe_t>::addr_t> _ether_addr(gxio_mpipe_link_t *link)
     // Address is in the 48 least-significant bits.
     assert((addr64 & 0xFFFFFFFFFFFF) == addr64);
 
-    // Immediatly returns the address in network byte order.
+    // Immediately returns the address in network byte order.
     net_t<ethernet_t<mpipe_t>::addr_t> addr;
     addr.net = {
         (uint8_t) (addr64 >> 40),

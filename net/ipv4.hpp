@@ -89,11 +89,15 @@ struct ipv4_addr_t {
     }
 } __attribute__ ((__packed__));
 
-template <typename data_link_t>
+template <typename data_link_var_t>
 struct ipv4_t {
     //
     // Member types
     //
+
+    // Redefine 'data_link_var_t' as 'data_link_t' so it can be accessible as a
+    // member type.
+    typedef data_link_var_t                 data_link_t;
 
     typedef ipv4_t<data_link_t>             this_t;
 
@@ -123,7 +127,11 @@ struct ipv4_t {
         net_t<addr_t>   daddr;
     } __attribute__ ((__packed__));
 
+    // Lower layer address type.
     typedef typename data_link_t::addr_t    data_link_addr_t;
+
+    // Upper layer protocol type.
+    typedef tcp_t<this_t>                   tcp_ipv4_t;
 
     //
     // Static fields

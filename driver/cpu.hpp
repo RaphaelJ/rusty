@@ -25,6 +25,12 @@ namespace tcp_mpipe {
 namespace driver {
 namespace cpu {
 
+// CPU cycle counter value.
+typedef uint64_t cycles_t;
+
+// CPU Frequency in Hz.
+static constexpr cycles_t CYCLES_PER_SECOND = 1200000000;
+
 // Binds the current task to the n-th available dataplane Tile (first CPU is 0).
 //
 // Fails if there is less than n + 1 dataplane Tiles.

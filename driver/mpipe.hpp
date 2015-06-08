@@ -27,6 +27,7 @@
 #include <array>
 #include <vector>
 
+#include <arch/cycle.h>         // get_cycle_count()
 #include <gxio/mpipe.h>         // gxio_mpipe_*, GXIO_MPIPE_*
 
 #include "driver/buffer.hpp"    // cursor_t
@@ -118,6 +119,7 @@ struct mpipe_t {
     // Upper network layers types.
     typedef ethernet_t<mpipe_t>                 ethernet_mpipe_t;
     typedef ethernet_mpipe_t::ipv4_ethernet_t   ipv4_mpipe_t;
+    typedef ipv4_mpipe_t::tcp_ipv4_t            tcp_mpipe_t;
 
     //
     // Fields
@@ -167,7 +169,7 @@ struct mpipe_t {
     timer_manager_t         timers;
 
     // Upper (Ethernet) data-link layer.
-    ethernet_t<mpipe_t>     data_link;
+    ethernet_mpipe_t        data_link;
 
     // -------------------------------------------------------------------------
 
@@ -200,12 +202,25 @@ struct mpipe_t {
     // You should always call 'close()' when you're done with mPIPE resources.
     void close(void);
 
+    //
+    // Static methods
+    //
+
+    // Returns the current TCP sequence number.
+    static inline tcp_mpipe_t::seq_t get_current_tcp_seq()
+    {
+        // Number of cycles between two increments of the sequence number
+        // (~ 4 µs).
+        static const cycles_t DELAY = CYCLES_PER_SECOND * 4 / 1000000;
+
+        return (tcp_mpipe_t::seq_t) (get_cycle_count() / DELAY);
+    }
+
 private:
     // Allocates a buffer from the smallest stack able to hold the requested
     // size.
     gxio_mpipe_bdesc_t _alloc_buffer(size_t size);
 };
-
 
 } } /* namespace tcp_mpipe::driver */
 

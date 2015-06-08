@@ -27,7 +27,11 @@
 #include <map>
 #include <unordered_map>
 
+#include "driver/cpu.hpp"   // cycles_t
+
 using namespace std;
+
+using namespace tcp_mpipe::driver::cpu;
 
 namespace tcp_mpipe {
 namespace driver {
@@ -44,9 +48,6 @@ struct timer_manager_t {
     //
     // Member types
     //
-
-    // CPU cycle counter value.
-    typedef uint64_t                        cycles_t;
 
     // Timer delay in microseconds (10^-6).
     typedef uint64_t                        delay_t;
@@ -68,13 +69,6 @@ struct timer_manager_t {
     // The 'destroy()' method uses the timer expiration date to retrieve and
     // remove a timer.
     typedef cycles_t                        timer_id_t;
-
-    //
-    // Static fields
-    //
-
-    // CPU Frequency in Hz.
-    static constexpr cycles_t CYCLES_PER_SECOND = 1200000000;
 
     //
     // Fields

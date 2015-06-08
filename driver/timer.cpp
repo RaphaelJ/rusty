@@ -27,10 +27,13 @@
 
 #include <arch/cycle.h>         // get_cycle_count()
 
+#include "driver/cpu.hpp"       // cycles_t, CYCLES_PER_SECOND
 #include "driver/driver.hpp"    // DRIVER_DEBUG()
 #include "util/macros.hpp"      // UNLIKELY()
 
 #include "driver/timer.hpp"
+
+using namespace tcp_mpipe::driver::cpu;
 
 namespace tcp_mpipe {
 namespace driver {
@@ -64,8 +67,7 @@ timer_manager_t::timer_id_t timer_manager_t::schedule(
     timer_manager_t::delay_t delay, const function<void()>& f
 )
 {
-    timer_manager_t::cycles_t expire =
-        get_cycle_count() + CYCLES_PER_SECOND * delay / 1000000;
+    cycles_t expire = get_cycle_count() + CYCLES_PER_SECOND * delay / 1000000;
 
     insert:
     {

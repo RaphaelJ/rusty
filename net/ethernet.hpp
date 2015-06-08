@@ -52,11 +52,15 @@ static const net_t<uint16_t> ETHERTYPE_IP_NET  = ETHERTYPE_IP;
 // The 'phys_t' type must provide the 'cursor_t' member type, the 'link_addr'
 // member field and the method :
 // 'send_packet(size_t payload_size, function<void(cursor_t)> payload_writer)'.
-template <typename phys_t>
+template <typename phys_var_t>
 struct ethernet_t {
     //
     // Member types
     //
+
+    // Redefine 'phys_var_t' as 'phys_t' so it can be accessible as a member
+    // type.
+    typedef phys_var_t                          phys_t;
 
     typedef ethernet_t<phys_t>                  this_t;
 

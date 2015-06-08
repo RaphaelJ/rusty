@@ -70,11 +70,15 @@ struct tcp_tcb_id_t {
     }
 };
 
-template <typename network_t>
+template <typename network_var_t>
 struct tcp_t {
     //
     // Member types
     //
+
+    // Redefine 'network_var_t' as 'network_t' so it can be accessible as a
+    // member type.
+    typedef network_var_t                   network_t;
 
     typedef tcp_t<network_t>                this_t;
 
@@ -189,6 +193,8 @@ struct tcp_t {
             return;
         }
 
+        TCP_DEBUG("%d", _current_seqnum());
+
         cursor.template read_with<struct tcphdr, void>(
         [this, cursor_size](const struct tcphdr *hdr, cursor_t payload) {
             #define IGNORE_SEGMENT(WHY, ...)                                   \
@@ -213,10 +219,9 @@ struct tcp_t {
 
 private:
 
-    // Returns the current sequence number which should be used in 
-    seq_t _current_seqnum(void)
+    inline seq_t _get_current_tcp_seq(void)
     {
-        return 0;
+        return network_t::data_link_t::phys_t::get_current_tcp_seq();
     }
 
 };
