@@ -22,6 +22,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include <endian.h>         // __BIG_ENDIAN, __BYTE_ORDER, __LITTLE_ENDIAN
+
 #include "net/endian.hpp"   // net_t
 
 #include "net/checksum.hpp"
@@ -29,16 +31,20 @@
 namespace tcp_mpipe {
 namespace net {
 
-net_t<uint16_t> checksum(const void *data, size_t size)
+uint16_t _ones_complement_sum(const void *data, size_t size)
 {
-    // The checksum is the one's completent (e.g. binary not) of the 16 bits
-    // one's complement sum of every pair of bytes (16 bits). If the data has an
-    // odd number of bytes, an additional zero byte is added as a padding.
+    // The 16 bits ones' complement sum is the ones' complement addition of
+    // every pair of bytes. If there is an odd number of bytes, then a zero byte
+    // is virtually added to the buffer.
     //
-    // When a 16 bits one's complement addition produces a carry bit, the carry
-    // must be added to the 16 bits result.
+    // e.g. the ones' complement sum of the bytes [a, b, c, d, e, f, g] is
+    // [a, b] +' [c, d] +' [e, f] +' [g, 0] where +' is the ones' complement
+    // addition.
     //
-    // As an example, here is the 4 bits one's complement addition of 1111 and
+    // Ones' complement addition is standard addition but with the carry bit
+    // added to the result.
+    //
+    // As an example, here is the 4 bits ones' complement addition of 1111 and
     // 1011:
     //
     //        1111
@@ -46,13 +52,13 @@ net_t<uint16_t> checksum(const void *data, size_t size)
     //      ------
     //      1 1000
     //      \--------> The carry bit here must be added to the result (1000).
-    //        1001 --> 4 bits one's complement addition of 1111 and 1011.
+    //        1001 --> 4 bits ones' complement addition of 1111 and 1011.
     //
-    // The 16 bits one's complement checksum is thus equal to:
+    // The 16 bits ones' complement sum is thus equal to:
     //
     //      uint16_t *p = (uint16_t *) data;
     //
-    //      // Computes the one's complement sum.
+    //      // Computes the ones' complement sum.
     //      uint32_t sum = 0;
     //      for (int i = 0; i < size / 2; i++) {
     //          sum += p[i];
@@ -60,10 +66,6 @@ net_t<uint16_t> checksum(const void *data, size_t size)
     //          if (sum >> 16) // if carry bit
     //              sum += 1;
     //      }
-    //
-    //      // The checksum is the binary negation (one's complement) of the 16
-    //      // least significant bits of the sum.
-    //      uint16_t checksum = ~((uint16_t) accumulator);
     //
     // Instead of only adding 16 bits at a time and checking for a carry bit
     // at each addition (which produces a lot unpredictable branches), we use a
@@ -81,43 +83,75 @@ net_t<uint16_t> checksum(const void *data, size_t size)
     //                            64 bits accumulator
     //
     // It's not a problem that the least significant 16 bits sum produces a
-    // carry bit as one's complement addition is commutative and as this carry
+    // carry bit as ones' complement addition is commutative and as this carry
     // bit will be added to the second sum, which will be summed with first one
     // later.
     //
     // The algorithm then adds the 32 bits carry bits accumulator to the sum of
-    // the two 16 bits sums to get the binary negation of the checksum.
+    // the two 16 bits sums to get the final sum..
     //
-    // [1]:
-    // microhowto.info/howto/calculate_an_internet_protocol_checksum_in_c.html
+    // [1]: http://tools.ietf.org/html/rfc1071
 
     assert (data != nullptr && size >= 0);
 
-    uint64_t sum = 0;
-    const uint32_t *data32 = (const uint32_t *) data;
+    uint64_t       sum      = 0;
+    const uint32_t *data32  = (const uint32_t *) ((intptr_t) data & ~0x3);
+
+    // Processes the first bytes not aligned on 32 bits.
+    intptr_t unaligned_offset = (intptr_t) data & 0x3;
+    if (unaligned_offset) {
+        // Loads the entire first word but masks the bytes which are before the
+        // buffer. This should be safe as memory pages should be word-aligned.
+
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            uint32_t word_mask = 0xFFFFFFFF << (unaligned_offset * 8);
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            uint32_t word_mask = 0xFFFFFFFF >> (unaligned_offset * 8);
+        #else
+            #error "Please set __BYTE_ORDER in <bits/endian.h>"
+        #endif
+
+        sum += data32[0] & word_mask;
+        size -= 4 - unaligned_offset;
+        data32++;
+    }
 
     // Sums 32 bits at a time.
     while (size > sizeof (uint32_t)) {
-        sum += *data32; // NOTE: 'ntohl()' doesn't seem to be required
-
-        data32++;
+        sum += *data32;
         size -= sizeof (uint32_t);
+        data32++;
     }
 
-    // Sums the last block which could not fit in an 32 bits integer.
+    // Sums the last bytes which could not fully fit a 32 bits integer.
     if (size > 0) {
-        uint32_t word = 0;
-        memcpy(&word, data32, size);
-        sum += ntohl(word);
+        // Loads the last entire word but masks the bytes that are after the
+        // buffer. This should be safe as a memory page should never end on a
+        // word boundary.
+
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            uint32_t word_mask = 0xFFFFFFFF >> ((4 - unaligned_offset) * 8);
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            uint32_t word_mask = 0xFFFFFFFF << ((4 - unaligned_offset) * 8);
+        #else
+            #error "Please set __BYTE_ORDER in <bits/endian.h>"
+        #endif
+
+        sum += data32[0] & word_mask;
     }
 
-    // 16 bits one's complement sums of two sub-sums and the carry bits.
+    // 16 bits ones' complement sums of the two sub-sums and the carry bits.
     while (sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
 
-    net_t<uint16_t> sum_net;
-    sum_net.net = ~sum;
-    return sum_net;
+    // If data started on an odd address, we computed the wrong sum. We computed
+    // [0, a] +' [b, c] +' ... instead of [a, b] +' [c, d] +' ...
+    //
+    // The correct sum can be obtained by swapping bytes.
+    if ((intptr_t) data & 0x1)
+        return _swap_bytes((uint16_t) sum);
+    else
+        return (uint16_t) sum;
 }
 
 } } /* namespace tcp_mpipe::net */

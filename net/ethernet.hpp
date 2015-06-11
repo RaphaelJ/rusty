@@ -1,5 +1,5 @@
 //
-// Provides functions to receive and send Ethernet frames.
+// Receives, processes and sends Ethernet frames.
 //
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
@@ -58,7 +58,7 @@ struct ethernet_t {
     // Member types
     //
 
-    // Redefine 'phys_var_t' as 'phys_t' so it can be accessible as a member
+    // Redefines 'phys_var_t' as 'phys_t' so it can be accessible as a member
     // type.
     typedef phys_var_t                          phys_t;
 
@@ -71,7 +71,7 @@ struct ethernet_t {
     struct addr_t {
         uint8_t value[ETH_ALEN];
 
-        inline addr_t& operator=(addr_t other)
+        inline addr_t &operator=(addr_t other)
         {
             memcpy(&value, &other.value, sizeof value);
             return *this;

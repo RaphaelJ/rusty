@@ -1,5 +1,5 @@
 //
-// Provides functions to receive and send TCP segments.
+// Receives, processes and and sends TCP segments.
 //
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
@@ -76,7 +76,7 @@ struct tcp_t {
     // Member types
     //
 
-    // Redefine 'network_var_t' as 'network_t' so it can be accessible as a
+    // Redefines 'network_var_t' as 'network_t' so it can be accessible as a
     // member type.
     typedef network_var_t                   network_t;
 
@@ -193,7 +193,7 @@ struct tcp_t {
             return;
         }
 
-        TCP_DEBUG("%d", _current_seqnum());
+        TCP_DEBUG("%d", _get_current_tcp_seq());
 
         cursor.template read_with<struct tcphdr, void>(
         [this, cursor_size](const struct tcphdr *hdr, cursor_t payload) {

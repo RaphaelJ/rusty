@@ -1,5 +1,5 @@
 //
-// Provides functions to receive and send IPv4 datagrams.
+// Receives, processes and sends IPv4 datagrams.
 //
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
@@ -49,7 +49,7 @@ namespace net {
 struct ipv4_addr_t {
     uint32_t    value;
 
-    inline ipv4_addr_t& operator=(ipv4_addr_t other)
+    inline ipv4_addr_t &operator=(ipv4_addr_t other)
     {
         value = other.value;
         return *this;
@@ -95,7 +95,7 @@ struct ipv4_t {
     // Member types
     //
 
-    // Redefine 'data_link_var_t' as 'data_link_t' so it can be accessible as a
+    // Redefines 'data_link_var_t' as 'data_link_t' so it can be accessible as a
     // member type.
     typedef data_link_var_t                 data_link_t;
 
