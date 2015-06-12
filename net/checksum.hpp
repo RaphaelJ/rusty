@@ -28,8 +28,6 @@
 namespace tcp_mpipe {
 namespace net {
 
-typedef net_t<uint16_t> checksum_t;
-
 // Computes the 16 bits ones' complement sum of the given buffer.
 uint16_t _ones_complement_sum(const void *data, size_t size);
 
@@ -42,11 +40,11 @@ static inline uint16_t _swap_bytes(uint16_t bytes);
 // Partial sum
 //
 
-// Partially computed checksum.
+// Partially computed checksums.
 //
 // Can be computed with 'partial_sum()' and combined with an other partially
-// computed checksum with 'partial_sum_append()'. The checksum can be then
-// computed from the partially computed sum with 'checksum()'.
+// computed sum with 'partial_sum_append()'. The checksum can be then computed
+// from the partially computed sum with 'checksum()'.
 struct partial_sum_t {
     uint16_t    sum;
 
@@ -85,6 +83,8 @@ inline partial_sum_t partial_sum_append(
 //
 // Checksum
 //
+
+typedef net_t<uint16_t> checksum_t;
 
 // Computes the Internet Checksum of the given buffer.
 //

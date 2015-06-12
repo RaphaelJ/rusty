@@ -31,7 +31,7 @@
 #include <netinet/ip.h>         // IPDEFTTL, IPVERSION, IP_MF, IPPROTO_TCP,
                                 // IPTOS_CLASS_DEFAULT
 
-#include "net/checksum.hpp"     // checksum()
+#include "net/checksum.hpp"     // checksum(), partial_sum_t, partial_sum()
 #include "net/tcp.hpp"          // tcp_t
 #include "util/macros.hpp"      // TCP_MPIPE_*, COLOR_*
 
@@ -122,7 +122,7 @@ struct ipv4_t {
         net_t<uint16_t> frag_off;
         uint8_t         ttl;
         uint8_t         protocol;
-        net_t<uint16_t> check;          // checksum
+        checksum_t      check;
         net_t<addr_t>   saddr;
         net_t<addr_t>   daddr;
     } __attribute__ ((__packed__));
@@ -328,6 +328,45 @@ struct ipv4_t {
                 payload_writer(cursor);
             });
         });
+    }
+
+    //
+    // Static methods
+    //
+
+    // Computes the partial (check) sum of the pseudo TCP header.
+    //
+    // The TCP segment checksum is computed on the TCP segment and on a pseudo
+    // header. This pseudo header will only be used to compute the checksum and
+    // will not be transmitted.
+    //
+    // The pseudo header of a TCP segment transmitted over IPv4 is the
+    // following:
+    //
+    // +--------------------------------------------+
+    // |           Source network address           |
+    // +--------------------------------------------+
+    // |         Destination network address        |
+    // +----------+----------+----------------------+
+    // |   zero   | Protocol |  TCP segment Length  |
+    // +----------+----------+----------------------+
+    //
+    // This method will be called by the TCP transport layer. Its implementation
+    // varies depending on the network layer protocol.
+    static partial_sum_t tcp_pseudo_header_sum(
+        addr_t src, addr_t dst, typename tcp_ipv4_t::seg_size_t segment_size
+    )
+    {
+        static constexpr size_t PSEUDO_HEADER_SIZE = 12;
+        char buffer[PSEUDO_HEADER_SIZE];
+
+        *((addr_t *) &buffer[0])                           = src;
+        *((addr_t *) &buffer[4])                           = dst;
+        buffer[8]                                          = 0;
+        buffer[9]                                          = IPPROTO_TCP;
+        *((typename tcp_ipv4_t::seg_size_t *) &buffer[10]) = segment_size;
+
+        return partial_sum(buffer, PSEUDO_HEADER_SIZE);
     }
 
 private:

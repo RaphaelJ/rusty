@@ -83,10 +83,9 @@ struct tcp_t {
     typedef tcp_t<network_t>                this_t;
 
     typedef typename network_t::addr_t      addr_t;
-
     typedef uint16_t                        port_t;
-
     typedef uint32_t                        seq_t;
+    typedef uint16_t                        seg_size_t;
 
     typedef typename network_t::cursor_t    cursor_t;
 
@@ -133,7 +132,7 @@ struct tcp_t {
         #endif
 
         net_t<uint16_t> window;
-        net_t<uint16_t> check;               // checksum
+        checksum_t      check;
         net_t<uint16_t> urg_ptr;
     } __attribute__ ((__packed__));
 
@@ -223,7 +222,6 @@ private:
     {
         return network_t::data_link_t::phys_t::get_current_tcp_seq();
     }
-
 };
 
 #undef TCP_COLOR
