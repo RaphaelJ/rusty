@@ -64,7 +64,7 @@ struct cursor_t {
     size_t              next_size;      // Remaining data in following buffers.
 
     // Complexity: O(1).
-    cursor_t(gxio_mpipe_idesc_t *idesc)
+    inline cursor_t(gxio_mpipe_idesc_t *idesc)
     {
         // gxio_mpipe_idesc_to_bdesc() seems to be broken on MDE v4.3.2.
         // gxio_mpipe_bdesc_t edesc      = gxio_mpipe_idesc_to_bdesc(idesc);
@@ -77,7 +77,7 @@ struct cursor_t {
     }
 
     // Complexity: O(1).
-    cursor_t(gxio_mpipe_bdesc_t *bdesc, size_t total_size)
+    inline cursor_t(gxio_mpipe_bdesc_t *bdesc, size_t total_size)
     {
         _init_with_bdesc(bdesc, total_size);
     }
@@ -85,7 +85,7 @@ struct cursor_t {
     // Returns the total number of remaining bytes.
     //
     // Complexity: O(1).
-    inline size_t size() const
+    inline size_t size(void) const
     {
         return current_size + next_size;
     }
@@ -93,7 +93,7 @@ struct cursor_t {
     // True if there is nothing more to read.
     //
     // Complexity: O(1).
-    inline bool is_empty(cursor_t cursor) const
+    inline bool is_empty(void) const
     {
         if (current_size == 0) {
             assert(next_size == 0);
@@ -259,6 +259,26 @@ struct cursor_t {
         );
     }
 
+    // Gives a pointer to read the given data directly in the buffer's memory
+    // without copying.
+    //
+    // Returns a new const buffer which references the data following what is to
+    // be read.
+    //
+    // Complexity: O(1).
+    template <typename T>
+    inline cursor_t in_place(const T **data) const
+    {
+        assert(can_in_place<T>());
+
+        *data = (const T *) current;
+
+        return cursor_t( // == this->drop(sizeof (T))
+            this->current + sizeof (T), this->current_size - sizeof (T),
+            this->next,                 this->next_size
+        );
+    }
+
     // Gives to the given function a pointer to read one instance of the data
     // and a cursor to the following data. The return value of the given
     // function will be forwarded as the return value of 'read_with()'.
@@ -271,10 +291,10 @@ struct cursor_t {
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to read.
     template <typename T, typename R>
-    inline R read_with(function<R(const T *, cursor_t)> f)
+    inline R read_with(function<R(const T *, cursor_t)> f) const
     {
         if (can_in_place<T>()) {
-            T *p;
+            const T *p;
             cursor_t cursor = in_place<T>(&p);
             return f(p, cursor);
         } else {
@@ -294,7 +314,7 @@ struct cursor_t {
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to read.
     template <typename T>
-    inline cursor_t read_with(function<void(const T *)> f)
+    inline cursor_t read_with(function<void(const T *)> f) const
     {
         return read_with<T, cursor_t>([&f](const T *data, cursor_t cursor) {
             f(data);
@@ -323,6 +343,19 @@ struct cursor_t {
             T data;
             f(&data);
             return write<T>(&data);
+        }
+    }
+
+    // Executes the given function on each buffer, in order.
+    //
+    // Complexity: O(n).
+    inline void for_each(function<void(const void *, size_t)> f) const
+    {
+        cursor_t cursor = *this;
+
+        while (!cursor.is_empty()) {
+            f(cursor.current, cursor.current_size);
+            cursor = cursor._next_buffer();
         }
     }
 

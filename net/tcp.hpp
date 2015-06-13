@@ -23,8 +23,6 @@
 
 #include <tuple>
 
-#include <netinet/tcp.h>    // tcphdr
-
 #include "net/checksum.hpp" // checksum()
 #include "net/endian.hpp"   // net_t
 
@@ -140,7 +138,7 @@ struct tcp_t {
     // Static fields
     //
 
-    static constexpr size_t             HEADERS_SIZE = sizeof (struct tcphdr);
+    static constexpr size_t             HEADERS_SIZE = sizeof (header_t);
 
     //
     // Fields
@@ -183,27 +181,44 @@ struct tcp_t {
 
     // Processes a TCP segment from the given network address wich starts at the
     // given cursor (network layer payload without headers).
-    void receive_segment(net_t<typename network_t::addr_t> src, cursor_t cursor)
+    void receive_segment(net_t<addr_t> src, cursor_t cursor)
     {
-        size_t cursor_size = cursor.size();
+        size_t seg_size = cursor.size();
 
-        if (UNLIKELY(cursor_size < HEADERS_SIZE)) {
+        if (UNLIKELY(seg_size < HEADERS_SIZE)) {
             TCP_ERROR("Segment ignored: too small to hold a TCP header");
             return;
         }
-
         TCP_DEBUG("%d", _get_current_tcp_seq());
 
-        cursor.template read_with<struct tcphdr, void>(
-        [this, cursor_size](const struct tcphdr *hdr, cursor_t payload) {
+        // Computes the pseudo-header sum before reading the header and the
+        // payload.
+        partial_sum_t partial_sum = network_t::tcp_pseudo_header_sum(
+            src, this->network->addr, net_t<seg_size_t>(seg_size)
+        );
+
+        cursor.template read_with<header_t, void>(
+        [this, src, seg_size, &partial_sum]
+        (const header_t *hdr, cursor_t payload) {
             #define IGNORE_SEGMENT(WHY, ...)                                   \
                 do {                                                           \
                     TCP_ERROR(                                                 \
                         "Segment from %s:%" PRIu16 " ignored: " WHY,           \
-                        network_t::addr_to_alpha(src), ##__VA_ARGS__           \
+                        network_t::addr_t::to_alpha(src), hdr->sport.host(),   \
+                        ##__VA_ARGS__                                          \
                     );                                                         \
                     return;                                                    \
                 } while (0)
+
+            partial_sum = partial_sum.append(partial_sum_t(hdr, HEADERS_SIZE));
+
+            // Computes and checks the final checksum by adding the sum of the
+            // payload.
+            checksum_t checksum = checksum_t(
+                partial_sum.append(partial_sum_t(payload))
+            );
+            if (UNLIKELY(!checksum.is_valid()))
+                IGNORE_SEGMENT("invalid checksum");
 
             #undef IGNORE_SEGMENT
         });

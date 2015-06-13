@@ -57,10 +57,12 @@ struct net_t {
     // Value in network byte order.
     host_t                  net;
 
+    // Initializes to an undefined value.
     inline net_t(void)
     {
     }
 
+    // Initializes with an host byte order value.
     inline net_t(host_t host)
     {
         net = _change_endian(host);
