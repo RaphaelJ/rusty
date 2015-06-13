@@ -26,13 +26,17 @@
 #include <functional>       // equal_to, hash
 #include <utility>          // swap()
 
-#include <arpa/inet.h>      // htons(), ntons()
+#include <arpa/inet.h>      // htonl(), htons(), ntohl(), ntons()
 #include <endian.h>         // __BIG_ENDIAN, __BYTE_ORDER, __LITTLE_ENDIAN
 
 using namespace std;
 
 namespace tcp_mpipe {
 namespace net {
+
+// Provides an implementation to change the endianness of a data-type.
+template <typename host_t>
+struct change_endian_t;
 
 // Contains a value in network byte order.
 //
@@ -65,12 +69,12 @@ struct net_t {
     // Initializes with an host byte order value.
     inline net_t(host_t host)
     {
-        net = _change_endian(host);
+        net = change_endian_t<host_t>::to_network(host);
     }
 
     inline host_t host(void) const
     {
-        return _change_endian(net);
+        return change_endian_t<host_t>::to_host(net);
     }
 
     inline net_t& operator=(this_t other)
@@ -117,10 +121,25 @@ struct net_t {
         val.net = _net;
         return val;
     }
+} __attribute__ ((__packed__));
 
-private:
-    // Changes the byte order iff the host endianness is different from the
-    // network endianness.
+//
+// Generic 'change_endian_t<>' implementation.
+//
+
+template <typename host_t>
+struct change_endian_t {
+    static inline host_t to_network(host_t host)
+    {
+        return _change_endian(host);
+    }
+
+    static inline host_t to_host(host_t net)
+    {
+        return _change_endian(net);
+    }
+
+    // Default bytes swapping implementation.
     static inline host_t _change_endian(host_t value)
     {
         #if __BYTE_ORDER == __LITTLE_ENDIAN
@@ -139,9 +158,37 @@ private:
             #error "Please set __BYTE_ORDER in <bits/endian.h>"
         #endif
     }
-} __attribute__ ((__packed__));
+};
 
-// TODO: specialized versions for uint16_t and uint32_t.
+//
+// Specialized 'change_endian_t<>' instances for uint16_t and uint32_t.
+//
+
+template <>
+struct change_endian_t<uint16_t> {
+    static inline uint16_t to_network(uint16_t host)
+    {
+        return htons(host);
+    }
+
+    static inline uint16_t to_host(uint16_t net)
+    {
+        return ntohs(net);
+    }
+};
+
+template <>
+struct change_endian_t<uint32_t> {
+    static inline uint32_t to_network(uint32_t host)
+    {
+        return htonl(host);
+    }
+
+    static inline uint32_t to_host(uint32_t net)
+    {
+        return ntohl(net);
+    }
+};
 
 } } /* namespace tcp_mpipe::net */
 
