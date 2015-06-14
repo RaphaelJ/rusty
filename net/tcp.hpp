@@ -84,20 +84,21 @@ struct tcp_t {
 
     typedef typename network_t::addr_t      addr_t;
     typedef uint16_t                        port_t;
+
+    // Sequence number.
     typedef uint32_t                        seq_t;
+    // Segment size.
     typedef uint16_t                        seg_size_t;
 
     typedef typename network_t::cursor_t    cursor_t;
 
-    struct listen_t {
-    };
-
+    // Uniquely identifies a TCP Control Block or a connection.
     typedef tcp_tcb_id_t<addr_t, port_t>    tcb_id_t;
 
     // TCP Control Block.
     //
-    // Contains information to track a TCP connection. Each TCB is uniquely
-    // identified by a 'tcb_id_t'.
+    // Contains information to track an established TCP connection. Each TCB is
+    // uniquely identified by a 'tcb_id_t'.
     struct tcb_t {
         //
         // Sliding windows
@@ -105,7 +106,7 @@ struct tcp_t {
 
         // Receiver sliding window.
         //
-        //     /-> Next expected sequence number
+        //     |> Next expected sequence number
         // ----+-------------------------------+-------------------------------
         //     |    Receiver sliding window    |
         // ----+-------------------------------+-------------------------------
@@ -146,8 +147,8 @@ struct tcp_t {
             size_t                              size;
 
             // Function provided by the user to write data into transmission
-            // buffers. The first function argument gives the offset, the number
-            // of bytes to write is given by the cursor size.
+            // buffers. The first function argument gives the offset (against
+            // 'seq'). The number of bytes to write is given by the cursor size.
             //
             // The function could be called an undefined number of times because
             // of packet segmentation and retransmission.
@@ -163,6 +164,30 @@ struct tcp_t {
         // Entries are sorted in increasing sequence number order and will be
         // removed once they have been fully acknowledged.
         queue<tx_queue_entry_t> tx_queue;
+    };
+
+    // Callback using in the call of 'accept()'.
+    //
+    // The function is given the identifier of the new established connection.
+    typedef function<void(tcb_id_t)>    accept_callback_t;
+
+    // Information about a port in LISTEN state.
+    struct listen_t {
+        // Functions to call when a new connection is established on the
+        // listening port.
+        //
+        // The queue should be empty if 'pending_queue' is not empty.
+        queue<accept_callback_t>    accept_queue;
+
+        // Contains established connections which have not been handled by an
+        // 'accept_callback_t'.
+        //
+        // The queue should be empty if 'accept_queue' is not empty and should
+        // never exceed 'backlog'.
+        queue<tcb_id_t>             pending_queue;
+
+        // Maximum number of pending connections in 'pending_queue'.
+        size_t                      backlog;
     };
 
     struct header_t {
@@ -284,13 +309,15 @@ struct tcp_t {
                     return;                                                    \
                 } while (0)
 
+            // Computes and checks the final checksum by adding the sum of the
+            // header and of the payload.
+
             partial_sum = partial_sum.append(partial_sum_t(hdr, HEADERS_SIZE));
 
-            // Computes and checks the final checksum by adding the sum of the
-            // payload.
             checksum_t checksum = checksum_t(
                 partial_sum.append(partial_sum_t(payload))
             );
+
             if (UNLIKELY(!checksum.is_valid()))
                 IGNORE_SEGMENT("invalid checksum");
 
