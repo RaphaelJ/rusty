@@ -74,20 +74,6 @@ int main(int argc, char **argv)
     // Tests the allocator.
     tile_allocator_t<int> allocator();
 
-    // Tests the timer.
-    timer::timer_manager_t timers;
-
-    {
-        bool triggered = false;
-
-        timers.schedule(1000000, [&triggered] {
-            triggered = true;
-        });
-
-        while (!triggered)
-            timers.tick();
-    }
-
     // Runs the application.
     mpipe.run();
 

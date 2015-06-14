@@ -197,8 +197,11 @@ struct ethernet_t {
                     return;                                                    \
                 } while (0)
 
-            if (UNLIKELY(hdr->dhost != addr && hdr->dhost != BROADCAST_ADDR))
-                IGNORE_FRAME("bad recipient");
+            if (UNLIKELY(hdr->dhost != addr && hdr->dhost != BROADCAST_ADDR)) {
+                IGNORE_FRAME(
+                    "bad recipient (%s)", addr_t::to_alpha(hdr->dhost)
+                );
+            }
 
             #define RECEIVE_FRAME()                                            \
                 do {                                                           \

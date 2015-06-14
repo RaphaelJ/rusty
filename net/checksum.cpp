@@ -76,9 +76,9 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
     // bits of the 64 bits accumulator will accumulate carry bits while the 32
     // least significant bits will accumulate two 16 bits sums:
     //
-    //  _______________________________________________________________________
+    // +-----------------------------------+-----------------+-----------------+
     // |   32 bits carry bits accumulator  | 2nd 16 bits sum | 1st 16 bits sum |
-    //  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+    // +-----------------------------------+-----------------+-----------------+
     // \-----------------------------------------------------------------------/
     //                            64 bits accumulator
     //

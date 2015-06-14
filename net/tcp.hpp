@@ -21,6 +21,8 @@
 #ifndef __TCP_MPIPE_NET_TCP_HPP__
 #define __TCP_MPIPE_NET_TCP_HPP__
 
+#include <functional>
+#include <queue>
 #include <tuple>
 
 #include "net/checksum.hpp" // checksum()
@@ -92,14 +94,82 @@ struct tcp_t {
 
     typedef tcp_tcb_id_t<addr_t, port_t>    tcb_id_t;
 
+    // TCP Control Block.
+    //
+    // Contains information to track a TCP connection. Each TCB is uniquely
+    // identified by a 'tcb_id_t'.
     struct tcb_t {
+        //
+        // Sliding windows
+        //
+
+        // Receiver sliding window.
+        //
+        //     /-> Next expected sequence number
+        // ----+-------------------------------+-------------------------------
+        //     |    Receiver sliding window    |
+        // ----+-------------------------------+-------------------------------
+        //     \-------------------------------/
+        //               Window size
+        struct {
+            uint16_t    size;
+            seq_t       next;   // Next sequence number to receive.
+        } rx_window;
+
+        // Transmitter (sender) sliding window.
+        //
+        //               |> First byte sent but unacknowledged
+        //             Next sequence number to send <|
+        //  -------------+---------------------------+--------------------+-----
+        //  Acknowledged | Sent but not acknowledged | Not sent but ready |
+        //  -------------+---------------------------+--------------------+-----
+        //               \------------------------------------------------/
+        //                                  Window size
+        struct {
+            uint16_t    size;
+            seq_t       unack;  // First unacknowledged byte.
+            seq_t       next;   // Next sequence number to send.
+        } tx_window;
+
+        //
+        // Transmission queue
+        //
+        // The queue is composed of functions which are able to write a
+        // determined amount of bytes in network buffers.
+        //
+
+        // A queue entry contains a function which will write data from 'seq' to
+        // 'seq' + 'size'. The 'acked' function will be called once the whole
+        // entry has been transmitted and acknowledged.
+        struct tx_queue_entry_t {
+            seq_t                               seq;
+            size_t                              size;
+
+            // Function provided by the user to write data into transmission
+            // buffers. The first function argument gives the offset, the number
+            // of bytes to write is given by the cursor size.
+            //
+            // The function could be called an undefined number of times because
+            // of packet segmentation and retransmission.
+            function<void(size_t, cursor_t)>    writer;
+
+            // Function which will be called once all the data provided by the
+            // writer will be acked.
+            function<void()>                    acked;
+        };
+
+        // Transmission queue.
+        //
+        // Entries are sorted in increasing sequence number order and will be
+        // removed once they have been fully acknowledged.
+        queue<tx_queue_entry_t> tx_queue;
     };
 
     struct header_t {
         net_t<port_t>   sport;              // Source port
         net_t<port_t>   dport;              // Destination port
-        net_t<seq_t>    seqnum;             // Sequence number
-        net_t<seq_t>    acknum;             // Acknowledgement number
+        net_t<seq_t>    seq_num;            // Sequence number
+        net_t<seq_t>    ack_num;            // Acknowledgement number
 
         //
         // Flags
@@ -200,6 +270,10 @@ struct tcp_t {
         cursor.template read_with<header_t, void>(
         [this, src, seg_size, &partial_sum]
         (const header_t *hdr, cursor_t payload) {
+            //
+            // Checks the TCP segment.
+            //
+
             #define IGNORE_SEGMENT(WHY, ...)                                   \
                 do {                                                           \
                     TCP_ERROR(                                                 \
@@ -221,6 +295,17 @@ struct tcp_t {
                 IGNORE_SEGMENT("invalid checksum");
 
             #undef IGNORE_SEGMENT
+
+            //
+            // Processes the TCP message.
+            //
+
+            TCP_DEBUG(
+                "Receives a TCP segment from %s:%" PRIu16 " on port %" PRIu16,
+                network_t::addr_t::to_alpha(src), hdr->sport.host(),
+                hdr->dport.host()
+            );
+
         });
     }
 

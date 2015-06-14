@@ -409,7 +409,7 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
 
         max_packet_size = this->buffer_stacks.back().buffer_size;
 
-        DRIVER_DEBUG("Maximum packet size: %zu", max_packet_size);
+        DRIVER_DEBUG("Maximum packet size: %zu bytes", max_packet_size);
     }
 }
 
@@ -437,7 +437,7 @@ void mpipe_t::run(void)
         cursor_t cursor(&idesc);
         cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
 
-        DRIVER_DEBUG("Receives an %zu bytes packet", cursor.size());
+        DRIVER_DEBUG("Receives a %zu bytes packet", cursor.size());
 
         this->data_link.receive_frame(cursor);
 
