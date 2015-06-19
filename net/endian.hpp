@@ -77,6 +77,15 @@ struct net_t {
         return change_endian_t<host_t>::to_host(net);
     }
 
+    // Contructs a network byte order value from a value which is already in
+    // network byte order.
+    static inline net_t<host_t> from_net(host_t _net)
+    {
+        net_t<host_t> val;
+        val.net = _net;
+        return val;
+    }
+
     inline net_t& operator=(this_t other)
     {
         net = other.net;
@@ -113,13 +122,34 @@ struct net_t {
         return a != b.host();
     }
 
-    // Contructs a network byte order value from a value which is already in
-    // network byte order.
-    static inline net_t<host_t> from_net(host_t _net)
+    friend inline this_t operator+(this_t a, this_t b)
     {
-        net_t<host_t> val;
-        val.net = _net;
-        return val;
+        return net_t<host_t>(a.host() + b.host());
+    }
+
+    friend inline this_t operator+(this_t a, host_t b)
+    {
+        return net_t<host_t>(a.host() + b);
+    }
+
+    friend inline this_t operator+(host_t a, this_t b)
+    {
+        return net_t<host_t>(a + b.host());
+    }
+
+    friend inline this_t operator-(this_t a, this_t b)
+    {
+        return net_t<host_t>(a.host() - b.host());
+    }
+
+    friend inline this_t operator-(this_t a, host_t b)
+    {
+        return net_t<host_t>(a.host() - b);
+    }
+
+    friend inline this_t operator-(host_t a, this_t b)
+    {
+        return net_t<host_t>(a - b.host());
     }
 } __attribute__ ((__packed__));
 

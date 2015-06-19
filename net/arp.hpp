@@ -324,35 +324,52 @@ struct arp_t {
         net_t<proto_addr_t> proto_addr, callback_t callback
     )
     {
+        // NOTE: this procedure should require an exclusive lock for addrs_cache
+        // and pending_reqs in case of multiple threads executing it.
+
         // lock
 
-        auto it = this->addrs_cache.find(proto_addr);
+        auto it_cache = this->addrs_cache.find(proto_addr);
 
-        if (it != this->addrs_cache.end()) {
+        if (it_cache != this->addrs_cache.end()) {
             // Hardware address is cached.
 
             // unlock
-            callback(&it->second.addr);
+            callback(&it_cache->second.addr);
             return true;
         } else {
             // Hardware address is NOT cached.
+            //
+            // Checks if a pending request exists for this address.
 
-            vector<callback_t> callbacks { callback };
-            auto p = this->pending_reqs.emplace(
-                make_pair(proto_addr, callbacks)
-            );
+            auto it_pending = this->pending_reqs.find(proto_addr);
 
-            if (!p.second) {
+            if (it_pending != this->pending_reqs.end()) {
                 // The pending request entry already existed. A request has
-                // already been broadcasted for this protocol address. Simple
-                // adds the callback to the vector.
+                // already been broadcasted for this protocol address.
+                //
+                // Simply adds the callback to the vector.
 
-                p.first->second.push_back(callback);
+                it_pending->second.callbacks.push_back(callback);
 
                 // unlock
             } else {
                 // No previous pending request entry.
-                // Broadcasts an ARP request for this protocol address.
+                //
+                // Creates the entry with a new timer and broadcasts an ARP
+                // request for this protocol address.
+
+                auto p = this->pending_reqs.emplace(
+                    proto_addr, pending_entry_t()
+                );
+                pending_entry_t *entry = &p.first->second;
+                entry->callbacks.push_back(callback);
+
+                entry->timer = timers->schedule(
+                    REQUEST_TIMEOUT, [this, proto_addr]() {
+                        this->_remove_pending_request(proto_addr);
+                    }
+                );
 
                 // unlock
 
@@ -366,6 +383,17 @@ struct arp_t {
     }
 
 private:
+
+    // Removes a pending entry for the given protocol address.
+    //
+    // Doesn't unschedule the timer.
+    void _remove_pending_request(net_t<proto_addr_t> addr)
+    {
+        ARP_DEBUG(
+            "Removes pending request for %s", proto_t::addr_t::to_alpha(addr)
+        );
+        this->pending_reqs.erase(addr);
+    }
 
     // Adds the given protocol to data-link layer address mapping in the cache
     // or updates cache entry if it already exists.
@@ -385,12 +413,12 @@ private:
         timer_id_t timer_id = timers->schedule(
             ENTRY_TIMEOUT, [this, proto_addr]()
             {
-                _remove_cache_entry(proto_addr);
+                this->_remove_cache_entry(proto_addr);
             }
         );
 
         cache_entry_t entry = { data_link_addr, timer_id };
-        auto inserted = this->addrs_cache.insert({ proto_addr, entry });
+        auto inserted = this->addrs_cache.emplace(proto_addr, entry);
 
         if (!inserted.second) {
             // Address already in cache, replace the previous value if
@@ -411,7 +439,7 @@ private:
             // Replaces the old timeout.
 
             timers->remove(inserted_entry->timer);
-            inserted_entry->timer = entry.timer;
+            inserted_entry->timer = timer_id;
 
             // unlock
         } else {
@@ -455,6 +483,7 @@ private:
                     callback(&data_link_addr);
             } else {
                 // No pending request.
+                //
                 // Occurs when the addres has not been requested.
 
                 // unlock
@@ -470,7 +499,7 @@ private:
         ARP_DEBUG(
             "Removes cache entry for %s", proto_t::addr_t::to_alpha(addr)
         );
-        addrs_cache.erase(addr);
+        this->addrs_cache.erase(addr);
     }
 
     // Writes the ARP message after the given buffer cursor.

@@ -46,12 +46,8 @@ namespace net {
 static const net_t<uint16_t> ETHERTYPE_ARP_NET = ETHERTYPE_ARP;
 static const net_t<uint16_t> ETHERTYPE_IP_NET  = ETHERTYPE_IP;
 
-// Ethernet stack able to process frames from and to the specified physical
-// 'phys_t' layer.
-//
-// The 'phys_t' type must provide the 'cursor_t' member type, the 'link_addr'
-// member field and the method :
-// 'send_packet(size_t payload_size, function<void(cursor_t)> payload_writer)'.
+// Ethernet layer able to process frames from and to the specified physical
+// 'phys_var_t' layer.
 template <typename phys_var_t>
 struct ethernet_t {
     //
@@ -111,11 +107,13 @@ struct ethernet_t {
     // Static fields
     //
 
-    static constexpr size_t   HEADER_SIZE     = sizeof (header_t);
+    static constexpr size_t         HEADER_SIZE     = sizeof (header_t);
 
     // 'arp_t' requires the following static fields:
-    static constexpr uint16_t ARP_TYPE        = ARPHRD_ETHER;
-    static constexpr size_t   ADDR_LEN        = ETH_ALEN;
+    static constexpr uint16_t       ARP_TYPE        = ARPHRD_ETHER;
+    static constexpr size_t         ADDR_LEN        = ETH_ALEN;
+
+    static const net_t<addr_t>      BROADCAST_ADDR;
 
     //
     // Fields
@@ -132,9 +130,6 @@ struct ethernet_t {
 
     // Maximum payload size. Doesn't change after intialization.
     size_t                          max_payload_size;
-
-    net_t<addr_t>                   BROADCAST_ADDR =
-        { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
 
     //
     // Methods
@@ -300,6 +295,10 @@ private:
         return min<size_t>(this->phys->max_packet_size - HEADER_SIZE, 1500);
     }
 };
+
+template <typename phys_t>
+const net_t<typename ethernet_t<phys_t>::addr_t> ethernet_t<phys_t>::BROADCAST_ADDR =
+    { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
 
 #undef ETH_COLOR
 #undef ETH_DEBUG

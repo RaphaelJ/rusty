@@ -31,7 +31,7 @@
 #include <netinet/ip.h>         // IPDEFTTL, IPVERSION, IP_MF, IPPROTO_TCP,
                                 // IPTOS_CLASS_DEFAULT
 
-#include "net/checksum.hpp"     // checksum(), partial_sum_t
+#include "net/checksum.hpp"     // checksum_t, partial_sum_t
 #include "net/tcp.hpp"          // tcp_t
 #include "util/macros.hpp"      // TCP_MPIPE_*, COLOR_*
 
@@ -89,6 +89,8 @@ struct ipv4_addr_t {
     }
 } __attribute__ ((__packed__));
 
+// IPv4 network layer able to process datagram from and to the specified
+// data-link 'data_link_var_t' layer.
 template <typename data_link_var_t>
 struct ipv4_t {
     //
@@ -320,7 +322,7 @@ struct ipv4_t {
 
             this->data_link->send_ip_payload(
             *data_link_dst, datagram_size,
-            [dst, payload_writer, protocol, datagram_size, datagram_id]
+            [this, dst, payload_writer, protocol, datagram_size, datagram_id]
             (cursor_t cursor) {
                 cursor = _write_header(
                     cursor, datagram_size, datagram_id, protocol, dst
@@ -367,15 +369,15 @@ struct ipv4_t {
     // varies depending on the network layer protocol, which explains why it's
     // not defined in 'tcp_t'.
     static partial_sum_t tcp_pseudo_header_sum(
-        net_t<addr_t> src, net_t<addr_t> dst,
+        net_t<addr_t> saddr, net_t<addr_t> daddr,
         net_t<typename tcp_ipv4_t::seg_size_t> seg_size
     )
     {
         static constexpr size_t PSEUDO_HEADER_SIZE = 12;
         char buffer[PSEUDO_HEADER_SIZE];
 
-        *((net_t<addr_t> *) &buffer[0])                           = src;
-        *((net_t<addr_t> *) &buffer[4])                           = dst;
+        *((net_t<addr_t> *) &buffer[0])                           = saddr;
+        *((net_t<addr_t> *) &buffer[4])                           = daddr;
         buffer[8]                                                 = 0;
         buffer[9]                                                 = IPPROTO_TCP;
         *((net_t<typename tcp_ipv4_t::seg_size_t> *) &buffer[10]) = seg_size;
@@ -386,14 +388,12 @@ struct ipv4_t {
 private:
 
     // Writes the IPv4 header starting at the given buffer cursor.
-    //
-    // 'dst' and 'protocol' must be in network byte order.
     cursor_t _write_header(
         cursor_t cursor, size_t datagram_size, uint16_t datagram_id,
         uint8_t protocol, net_t<addr_t> dst
     )
     {
-        static const net_t<uint16_t> FRAG_OFF_NET = IP_DF;
+        static const net_t<uint16_t> FRAG_OFF_NET = IP_DF; // Don't fragment.
 
         return cursor.template write_with<header_t>(
         [this, datagram_size, datagram_id, protocol, dst](header_t *hdr) {
@@ -404,12 +404,11 @@ private:
             hdr->id       = datagram_id;
             hdr->frag_off = FRAG_OFF_NET;
             hdr->ttl      = IPDEFTTL;
-            hdr-protocol  = protocol;
-            hdr->check    = 0;
+            hdr->protocol = protocol;
             hdr->saddr    = this->addr;
             hdr->daddr    = dst;
 
-            hdr->check    = checksum(hdr, HEADER_SIZE);
+            hdr->check    = checksum_t(hdr, HEADER_SIZE);
         });
     }
 

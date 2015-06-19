@@ -44,7 +44,7 @@ static inline uint16_t _swap_bytes(uint16_t bytes);
 //
 // Can be computed with 'partial_sum()' and combined with an other partially
 // computed sum with 'partial_sum_append()'. The checksum can be then computed
-// from the partially computed sum with 'checksum()'.
+// from the partially computed sum with 'checksum_t()'.
 struct partial_sum_t {
     uint16_t    sum;
 
@@ -110,9 +110,10 @@ struct partial_sum_t {
 struct checksum_t {
     net_t<uint16_t> value;
 
-    // Initializes to an undefined value.
+    // Initializes to a zero value.
     inline checksum_t(void)
     {
+        this->value = 0;
     }
 
     // Computes the Internet Checksum of the given buffer.
