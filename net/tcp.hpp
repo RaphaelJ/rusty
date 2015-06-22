@@ -21,12 +21,14 @@
 #ifndef __TCP_MPIPE_NET_TCP_HPP__
 #define __TCP_MPIPE_NET_TCP_HPP__
 
-#include <functional>       // equal_to, hash
+#include <functional>               // equal_to, hash
 #include <queue>
 #include <tuple>
 
-#include "net/checksum.hpp" // checksum(), partial_sum_t
-#include "net/endian.hpp"   // net_t
+#include <netinet/tcp.h>            // TCPOPT_EOL, TCPOPT_NOP, TCPOPT_MAXSEG
+
+#include "net/checksum.hpp"         // checksum(), partial_sum_t
+#include "net/endian.hpp"           // net_t, to_host()
 
 using namespace std;
 
@@ -103,6 +105,29 @@ struct tcp_t {
     // Contains information to track an established TCP connection. Each TCB is
     // uniquely identified by a 'tcb_id_t'.
     struct tcb_t {
+        enum state_t {
+            SYN_SENT,       // Waiting for a matching connection request after
+                            // having sent a connection request.
+            SYN_RECEIVED,   // Waiting for a confirming connection request
+                            // acknowledgment after having both received and
+                            // sent a connection request.
+            ESTABLISHED,    // Open connection, data received can be delivered
+                            // to the user.
+            FIN_WAIT_1,     // Waiting for a connection termination request
+                            // from the remote TCP, or an acknowledgment of the
+                            // connection termination request previously sent.
+            FIN_WAIT_2,     // Waiting for a connection termination request
+                            // from the remote TCP.
+            CLOSE_WAIT,     // Waiting for a connection termination request
+                            // from the local user.
+            CLOSING,        // Waiting for a connection termination request
+                            // acknowledgment from the remote TCP.
+            LAST_ACK        // Waiting for an acknowledgment of the connection
+                            // termination request previously sent to the remote
+                            // TCP (which includes an acknowledgment of its
+                            // connection termination request).
+        } state;
+
         //
         // Sliding windows
         //
@@ -171,6 +196,8 @@ struct tcp_t {
         // Entries are sorted in increasing sequence number order and will be
         // removed once they have been fully acknowledged.
         queue<tx_queue_entry_t> tx_queue;
+
+        size_t                  mss;    // Maximum segment size.
     };
 
     // Callback using in the call of 'accept()'.
@@ -198,33 +225,39 @@ struct tcp_t {
     };
 
     struct header_t {
-        net_t<port_t>   sport;              // Source port
-        net_t<port_t>   dport;              // Destination port
-        net_t<seq_t>    seq;                // Sequence number
-        net_t<seq_t>    ack;                // Acknowledgement number
+        net_t<port_t>   sport;      // Source port
+        net_t<port_t>   dport;      // Destination port
+        net_t<seq_t>    seq;        // Sequence number
+        net_t<seq_t>    ack;        // Acknowledgement number
 
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            uint8_t         res1:4;
+            uint8_t         doff:4; // Data offset. Number of 32 bits words
+                                    // before the payload.
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            uint8_t         doff:4;
+            uint8_t         res1:4;
+        #else
+            #error "Please fix __BYTE_ORDER in <bits/endian.h>"
+        #endif
 
         struct flags_t {
             #if __BYTE_ORDER == __LITTLE_ENDIAN
-                uint16_t    res1:4;
-                uint16_t    doff:4;
-                uint16_t    fin:1;
-                uint16_t    syn:1;
-                uint16_t    rst:1;
-                uint16_t    psh:1;
-                uint16_t    ack:1;
-                uint16_t    urg:1;
-                uint16_t    res2:2;
+                uint8_t     fin:1;
+                uint8_t     syn:1;
+                uint8_t     rst:1;
+                uint8_t     psh:1;
+                uint8_t     ack:1;
+                uint8_t     urg:1;
+                uint8_t     res2:2;
             #elif __BYTE_ORDER == __BIG_ENDIAN
-                uint16_t    doff:4;
-                uint16_t    res1:4;
-                uint16_t    res2:2;
-                uint16_t    urg:1;
-                uint16_t    ack:1;
-                uint16_t    psh:1;
-                uint16_t    rst:1;
-                uint16_t    syn:1;
-                uint16_t    fin:1;
+                uint8_t     res2:2;
+                uint8_t     urg:1;
+                uint8_t     ack:1;
+                uint8_t     psh:1;
+                uint8_t     rst:1;
+                uint8_t     syn:1;
+                uint8_t     fin:1;
             #else
                 #error "Please fix __BYTE_ORDER in <bits/endian.h>"
             #endif
@@ -234,6 +267,13 @@ struct tcp_t {
         checksum_t      check;
         net_t<uint16_t> urg_ptr;
     } __attribute__ ((__packed__));
+
+    struct options_t {
+        enum mss_option_t : int {
+            // Positive value: Option specified MSS.
+            NO_MSS_OPTION       = -1
+        } mss;
+    };
 
     //
     // Static fields
@@ -284,7 +324,7 @@ struct tcp_t {
     // start at the given cursor (network layer payload without headers).
     //
     // Usually called by the network layer.
-    void receive_segment(net_t<addr_t> src, cursor_t cursor)
+    void receive_segment(net_t<addr_t> saddr, cursor_t cursor)
     {
         size_t seg_size = cursor.size();
 
@@ -296,25 +336,28 @@ struct tcp_t {
         // Computes the pseudo-header sum before reading the header and the
         // payload.
         partial_sum_t partial_sum = network_t::tcp_pseudo_header_sum(
-            src, this->network->addr, net_t<seg_size_t>(seg_size)
+            saddr, this->network->addr, net_t<seg_size_t>(seg_size)
         );
 
         cursor.template read_with<header_t, void>(
-        [this, src, seg_size, &partial_sum]
+        [this, saddr, seg_size, &partial_sum]
         (const header_t *hdr, cursor_t payload) {
             //
-            // Checks the TCP segment.
+            // Checks and processes the TCP header.
             //
 
             #define IGNORE_SEGMENT(WHY, ...)                                   \
                 do {                                                           \
                     TCP_ERROR(                                                 \
                         "Segment from %s:%" PRIu16 " ignored: " WHY,           \
-                        network_t::addr_t::to_alpha(src), hdr->sport.host(),   \
+                        network_t::addr_t::to_alpha(saddr), hdr->sport.host(), \
                         ##__VA_ARGS__                                          \
                     );                                                         \
                     return;                                                    \
                 } while (0)
+
+            if (UNLIKELY(hdr->doff < HEADER_SIZE / sizeof (uint32_t)))
+                IGNORE_SEGMENT("data offset to small to contain the header");
 
             // Computes and checks the final checksum by adding the sum of the
             // header and of the payload.
@@ -326,7 +369,27 @@ struct tcp_t {
             );
 
             if (UNLIKELY(!checksum.is_valid()))
-                IGNORE_SEGMENT("invalid checksum");
+                IGNORE_SEGMENT("invalid TCP checksum");
+
+            //
+            // Processes TCP options.
+            //
+
+            _parse_options_status_t status;
+            options_t options = _parse_options(hdr, &payload, &status);
+
+            switch (status) {
+            case OPTIONS_SUCCESS:
+                break;
+            case MALFORMED_OPTIONS:
+                IGNORE_SEGMENT("malformed options");
+                break;
+            case INVALID_MSS:
+                IGNORE_SEGMENT("invalid use of the MSS option");
+                break;
+            default:
+                IGNORE_SEGMENT("invalid options");
+            };
 
             #undef IGNORE_SEGMENT
 
@@ -336,29 +399,21 @@ struct tcp_t {
 
             TCP_DEBUG(
                 "Receives a TCP segment from %s:%" PRIu16 " on port %" PRIu16,
-                network_t::addr_t::to_alpha(src), hdr->sport.host(),
+                network_t::addr_t::to_alpha(saddr), hdr->sport.host(),
                 hdr->dport.host()
             );
 
-            this->network->send_tcp_payload(
-            src, HEADER_SIZE,
-            [saddr = this->network->addr, sport = hdr->dport,
-             daddr = src, dport = hdr->sport, ack = hdr->seq + 1]
-            (cursor_t cursor) {
-                typename header_t::flags_t flags = {0};
-                flags.doff = 5;
-                flags.rst  = 1;
-                flags.ack  = 1;
+            if (hdr->flags.syn) {
+                //
+                // SYN segment.
+                //
 
-                partial_sum_t pseudo_hdr_sum = network_t::tcp_pseudo_header_sum(
-                    saddr, daddr, net_t<seg_size_t>(HEADER_SIZE)
+                this->_send_rst_segment(
+                    hdr->dport, saddr, hdr->sport, hdr->ack + 1
                 );
 
-                _write_header(
-                    cursor, sport, dport, _get_current_tcp_seq(), ack, flags,
-                    0, pseudo_hdr_sum, partial_sum_t()
-                );
-            });
+                TCP_DEBUG("MSS: %d", options.mss);
+            }
         });
     }
 
@@ -380,6 +435,125 @@ struct tcp_t {
     
 
 private:
+    
+    //
+    // TCP options
+    //
+
+    enum _parse_options_status_t {
+        OPTIONS_SUCCESS,
+        MALFORMED_OPTIONS,
+        INVALID_MSS         // Malformed or misused MSS option.
+    };
+
+    // Parses TCP options located after the header.
+    //
+    // The 'payload' cursor points to the first byte after the header and will
+    // point to the first byte after the options once the function returns.
+    static options_t _parse_options(
+        const header_t *hdr, cursor_t *payload, _parse_options_status_t *status
+    )
+    {
+        options_t options;
+        options.mss = options_t::NO_MSS_OPTION;
+
+        *status = OPTIONS_SUCCESS;
+
+        size_t options_size = (hdr->doff * 4) - HEADER_SIZE;
+
+        if (options_size <= 0)
+            return options;
+
+        *payload = payload->read_with(
+        [flags = hdr->flags, status, &options, options_size]
+        (const char *data_char) mutable {
+            const uint8_t *data = (const uint8_t *) data_char;
+            const uint8_t *end  = data + options_size;
+
+            while (data < end) {
+                uint8_t kind = data[0];
+
+                switch (kind) {
+                // End of options list
+                case TCPOPT_EOL:
+                    goto stop_parsing;
+
+                // No-operation option
+                case TCPOPT_NOP:
+                    data++;
+                    continue;
+
+                // Maximum segment size option
+                case TCPOPT_MAXSEG:
+                    if (UNLIKELY(
+                           data[1] != 4 || !flags.syn
+                        || options.mss != options_t::NO_MSS_OPTION
+                    )) {
+                        *status = INVALID_MSS;
+                        goto stop_parsing;
+                    } else if (UNLIKELY(data + 4 > end)) {
+                        *status = MALFORMED_OPTIONS;
+                        goto stop_parsing;
+                    } else {
+                        uint16_t mss = to_host<uint16_t>(
+                            ((uint16_t *) data)[1]
+                        );
+
+                        options.mss = (typename options_t::mss_option_t) mss;
+
+                        data += 4;
+                        continue;
+                    }
+
+                default:
+                    TCP_DEBUG("Unknwown option kind: %d. Ignore", kind);
+
+                    // TCP options with other than TCPOPT_EOL or TCPOPT_NOP
+                    // contain their length in their second byte.
+                    uint8_t length = data[1];
+                    if (UNLIKELY(data + length > end)) {
+                        *status = MALFORMED_OPTIONS;
+                        goto stop_parsing;
+                    }
+
+                    data += length;
+                };
+            }
+
+            stop_parsing:
+            {
+            }
+        }, options_size);
+
+        return options;
+    }
+
+    // Sends an empty TCP segment with the RST flag enabled.
+    void _send_rst_segment(
+        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
+        net_t<seq_t> ack
+    )
+    {
+        net_t<addr_t> saddr = this->network->addr;
+
+        this->network->send_tcp_payload(
+        daddr, HEADER_SIZE,
+        [saddr, sport, daddr, dport, ack] (cursor_t cursor) {
+            typename header_t::flags_t flags = { 0 };
+            flags.rst = 1;
+            flags.ack = 1;
+
+            partial_sum_t pseudo_hdr_sum = network_t::tcp_pseudo_header_sum(
+                saddr, daddr, net_t<seg_size_t>(HEADER_SIZE)
+            );
+
+            _write_header(
+                cursor, sport, dport, _get_current_tcp_seq(), ack, flags,
+                0, pseudo_hdr_sum, partial_sum_t()
+            );
+        }
+        );
+    }
 
     // Writes the TCP header starting at the given buffer cursor.
     static cursor_t _write_header(
@@ -396,6 +570,7 @@ private:
             hdr->dport   = dport;
             hdr->seq     = seq;
             hdr->ack     = ack;
+            hdr->doff    = HEADER_SIZE / sizeof (uint32_t);
             hdr->flags   = flags;
             hdr->window  = window;
             hdr->urg_ptr = 0;

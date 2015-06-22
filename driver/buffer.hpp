@@ -114,6 +114,7 @@ struct cursor_t {
     }
 
     // Returns a new cursor which references 'n' bytes after the cursor.
+    //
     // Returns an empty cursor if the 'n' is larger than 'size()'.
     //
     // Complexity: O(n).
@@ -128,72 +129,77 @@ struct cursor_t {
                 cursor = cursor._next_buffer();
             }
 
-            return {
-                cursor.current + n, cursor.current_size - n,
-                cursor.next, cursor.next_size
-            };
+            return cursor._drop_in_buffer(n);
         }
     }
 
-    // Equivalent to drop(sizeof (T)).
-    //
-    // Complexity: O(n).
+    // Equivalent to 'drop(sizeof (T))'.
     template <typename T>
     inline cursor_t drop() const
     {
         return drop(sizeof (T));
     }
 
-    // Equivalent to drop(sizeof (T) * n).
-    //
-    // Complexity: O(n).
+    // Equivalent to 'drop(sizeof (T) * n)'.
     template <typename T>
     inline cursor_t drop(size_t n) const
     {
         return drop(sizeof (T) * n);
     }
 
-    // Returns true if there is enough bytes left to read or write one instance
-    // of the requested item using 'read()' or 'write()'.
+    // -------------------------------------------------------------------------
+
+    //
+    // Copying read and write.
+    //
+
+    // Returns true if there is enough bytes left to read or write 'n' bytes*
+    // using 'read()' or 'write()'.
     //
     // Complexity: O(1).
+    inline bool can(size_t n) const
+    {
+        return n <= size();
+    }
+
+    // Equivalent to 'can(sizeof (T))'.
     template <typename T>
     inline bool can() const
     {
-        return sizeof (T) <= size();
+        return can(sizeof (T));
     }
 
-    // Reads one instance of the given type. There must be enough bytes in the
-    // buffer to read the item (see 'can()').
+    // Reads 'n' bytes of data. There must be enough bytes in the buffer to read
+    // the item (see 'can()').
     //
     // Returns a new buffer which references the data following what has been
     // read.
     //
     // Complexity: O(n) where 'n' is the number of bytes to read.
-    template <typename T>
-    inline cursor_t read(T *data) const
+    inline cursor_t read(char *data, size_t n) const
     {
-        assert(can<T>());
-
-        char        *data_char  = (char *) data;
+        assert(can(n));
         cursor_t    cursor      = *this;
-        size_t      to_read     = sizeof (T);
 
-        while (to_read >= cursor.current_size) {
-            memcpy(data_char, cursor.current, cursor.current_size);
+        while (n >= cursor.current_size) {
+            memcpy(data, cursor.current, cursor.current_size);
             cursor = cursor._next_buffer();
-            to_read -= cursor.current_size;
+            n -= cursor.current_size;
         }
 
-        if (to_read > 0) {
-            memcpy(data_char, cursor.current, to_read);
-            cursor = cursor_t( // == cursor.drop(to_read)
-                cursor.current + to_read, cursor.current_size - sizeof (T),
-                cursor.next, cursor.next_size
-            );
+        if (n > 0) {
+            memcpy(data, cursor.current, n);
+            cursor = cursor._drop_in_buffer(n);
         }
 
         return cursor;
+    }
+
+    // Equivalent to 'read(data, sizeof (T))'.
+    template <typename T>
+    inline cursor_t read(T *data) const
+    {
+        return read((char *) data, sizeof (T));
     }
 
     // Writes one instance of the given type. There must be enough bytes in the
@@ -220,76 +226,113 @@ struct cursor_t {
 
         if (to_write > 0) {
             memcpy(cursor.current, data_char, to_write);
-            cursor = cursor_t( // == cursor.drop(to_write)
-                cursor.current + to_write, cursor.current_size - sizeof (T),
-                cursor.next, cursor.next_size
-            );
+            cursor = cursor._drop_in_buffer(to_write);
         }
 
         return cursor;
     }
 
+    // -------------------------------------------------------------------------
+
+    //
+    // In-place read and write.
+    //
+
     // Returns true if there is enough bytes left in the *current buffer* to
-    // read or write one instance of the requested item using 'in_place()'.
+    // read or write 'n' bytes with 'in_place()'.
     //
     // Complexity: O(1).
+    inline bool can_in_place(size_t n) const
+    {
+        return n <= current_size;
+    }
+
+    // Equivalent to 'can_in_place(sizeof (T))'.
     template <typename T>
     inline bool can_in_place() const
     {
-        return sizeof (T) <= current_size;
+        return can_in_place(sizeof (T));
     }
 
-    // Gives a pointer to read or write the given data directly in the buffer's
-    // memory without copying.
+    // Gives a pointer to read or write the given number of bytes directly in
+    // the buffer's memory without copying.
     //
     // Returns a new buffer which references the data following what is to be
     // read or written.
     //
     // Complexity: O(1).
+    inline cursor_t in_place(char **data, size_t n)
+    {
+        assert(can_in_place(n));
+
+        *data = this->current;
+
+        if (n == current_size)
+            return _next_buffer();
+        else
+            return _drop_in_buffer(n);
+    }
+
+    // Gives a pointer to read or write the given number of bytes directly in
+    // the buffer's memory without copying.
+    //
+    // Returns a new buffer which references the data following what is to be
+    // read or written.
+    //
+    // Complexity: O(1).
+    inline cursor_t in_place(const char **data, size_t n) const
+    {
+        assert(can_in_place(n));
+
+        *data = current;
+
+        if (n == current_size)
+            return _next_buffer();
+        else
+            return _drop_in_buffer(n);
+    }
+
+    // Equivalent to 'in_place(data, sizeof (T))'.
     template <typename T>
     inline cursor_t in_place(T **data)
     {
-        assert(can_in_place<T>());
-
-        *data = (T *) current;
-
-        return cursor_t( // == this->drop(sizeof (T))
-            this->current + sizeof (T), this->current_size - sizeof (T),
-            this->next,                 this->next_size
-        );
+        return in_place((char **) data, sizeof (T));
     }
 
-    // Gives a pointer to read the given data directly in the buffer's memory
-    // without copying.
-    //
-    // Returns a new const buffer which references the data following what is to
-    // be read.
-    //
-    // Complexity: O(1).
+    // Equivalent to 'in_place(data, sizeof (T))'.
     template <typename T>
     inline cursor_t in_place(const T **data) const
     {
-        assert(can_in_place<T>());
-
-        *data = (const T *) current;
-
-        return cursor_t( // == this->drop(sizeof (T))
-            this->current + sizeof (T), this->current_size - sizeof (T),
-            this->next,                 this->next_size
-        );
+        return in_place((const char **) data, sizeof (T));
     }
 
-    // Gives to the given function a pointer to read one instance of the data
-    // and a cursor to the following data. The return value of the given
-    // function will be forwarded as the return value of 'read_with()'.
+    // Gives to the given function a pointer to read 'n' bytes of data and a
+    // cursor to the following data. The return value of the given function will
+    // be forwarded as the return value of 'read_with()'.
     //
-    // Will directly refer ence the buffer's memory if it's possible
+    // Will directly reference the buffer's memory if it's possible
     // ('can_in_place()'), will gives a reference to a copy otherwise.
     //
     // The call to the given function is a tail-call.
     //
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to read.
+    template <typename R>
+    inline R read_with(function<R(const char *, cursor_t)> f, size_t n) const
+    {
+        if (can_in_place(n)) {
+            const char *p;
+            cursor_t cursor = in_place(&p, n);
+            return f(p, cursor);
+        } else {
+            assert(can(n));
+            char data[n];
+            cursor_t cursor = read(data, n);
+            return f(data, cursor);
+        }
+    }
+
+    // Equivalent to 'read_with<R>(f, sizeof (T))'.
     template <typename T, typename R>
     inline R read_with(function<R(const T *, cursor_t)> f) const
     {
@@ -298,13 +341,14 @@ struct cursor_t {
             cursor_t cursor = in_place<T>(&p);
             return f(p, cursor);
         } else {
+            assert(can<T>());
             T data;
             cursor_t cursor = read<T>(&data);
             return f(&data, cursor);
         }
     }
 
-    // Gives a pointer to read one instance of the data to the function.
+    // Gives a pointer to read 'n' bytes of data to the function.
     //
     // Will directly reference the buffer's memory if it's possible
     // ('can_in_place()'), will gives a reference to a copy otherwise.
@@ -313,6 +357,15 @@ struct cursor_t {
     //
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to read.
+    inline cursor_t read_with(function<void(const char *)> f, size_t n) const
+    {
+        return read_with<cursor_t>([&f](const char *data, cursor_t cursor) {
+            f(data);
+            return cursor;
+        }, n);
+    }
+
+    // Equivalent to 'read_with(f, sizeof (T))'.
     template <typename T>
     inline cursor_t read_with(function<void(const T *)> f) const
     {
@@ -340,6 +393,7 @@ struct cursor_t {
             f(p);
             return cursor;
         } else {
+            assert(can<T>());
             T data;
             f(&data);
             return write<T>(&data);
@@ -349,7 +403,7 @@ struct cursor_t {
     // Executes the given function on each buffer, in order.
     //
     // Complexity: O(n).
-    inline void for_each(function<void(const void *, size_t)> f) const
+    inline void for_each(function<void(const char *, size_t)> f) const
     {
         cursor_t cursor = *this;
 
@@ -377,6 +431,22 @@ private:
     inline cursor_t _next_buffer(void) const
     {
         return cursor_t(next, next_size);
+    }
+
+    // Returns a new cursor which references 'n' bytes after the cursor.
+    //
+    // Does *not* handle the case when 'n' is excatlty equal to 'current_size'
+    // (i.e. when a new buffer must be loaded).
+    //
+    // Complexity: O(1).
+    inline cursor_t _drop_in_buffer(size_t n) const
+    {
+        assert(can_in_place(n) && (n < current_size || next == nullptr));
+
+        return {
+            current + n, current_size - n,
+            next,        next_size
+        };
     }
 };
 

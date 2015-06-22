@@ -34,9 +34,15 @@ using namespace std;
 namespace tcp_mpipe {
 namespace net {
 
-// Provides an implementation to change the endianness of a data-type.
-template <typename host_t>
-struct change_endian_t;
+// Provides two generic function to change the endianness of a data-type.
+//
+// The functions can be specialized for various types.
+
+template <typename T>
+inline T to_network(T host);
+
+template <typename T>
+inline T to_host(T net);
 
 // Contains a value in network byte order.
 //
@@ -69,12 +75,12 @@ struct net_t {
     // Initializes with an host byte order value.
     inline net_t(host_t host)
     {
-        net = change_endian_t<host_t>::to_network(host);
+        net = to_network<host_t>(host);
     }
 
     inline host_t host(void) const
     {
-        return change_endian_t<host_t>::to_host(net);
+        return to_host<host_t>(net);
     }
 
     // Contructs a network byte order value from a value which is already in
@@ -154,71 +160,74 @@ struct net_t {
 } __attribute__ ((__packed__));
 
 //
-// Generic 'change_endian_t<>' implementation.
-//
-
-template <typename host_t>
-struct change_endian_t {
-    static inline host_t to_network(host_t host)
-    {
-        return _change_endian(host);
-    }
-
-    static inline host_t to_host(host_t net)
-    {
-        return _change_endian(net);
-    }
-
-    // Default bytes swapping implementation.
-    static inline host_t _change_endian(host_t value)
-    {
-        #if __BYTE_ORDER == __LITTLE_ENDIAN
-            uint8_t *value_bytes = (uint8_t *) &value;
-
-            for (int i = 0; i < sizeof (host_t) / 2; i++) {
-                swap<uint8_t>(
-                    value_bytes[i], value_bytes[sizeof (host_t) - 1 - i]
-                );
-            }
-
-            return value;
-        #elif __BYTE_ORDER == __BIG_ENDIAN
-            return value;
-        #else
-            #error "Please set __BYTE_ORDER in <bits/endian.h>"
-        #endif
-    }
-};
-
-//
-// Specialized 'change_endian_t<>' instances for uint16_t and uint32_t.
+// Specialized 'to_network()' and 'to_host()' instances for 'uint16_t' and
+// 'uint32_t'.
 //
 
 template <>
-struct change_endian_t<uint16_t> {
-    static inline uint16_t to_network(uint16_t host)
-    {
-        return htons(host);
-    }
+inline uint16_t to_network(uint16_t host)
+{
+    return htons(host);
+}
 
-    static inline uint16_t to_host(uint16_t net)
-    {
-        return ntohs(net);
-    }
-};
 
 template <>
-struct change_endian_t<uint32_t> {
-    static inline uint32_t to_network(uint32_t host)
-    {
-        return htonl(host);
-    }
+inline uint16_t to_host(uint16_t net)
+{
+    return ntohs(net);
+}
 
-    static inline uint32_t to_host(uint32_t net)
-    {
-        return ntohl(net);
-    }
-};
+template <>
+inline uint32_t to_network(uint32_t host)
+{
+    return htonl(host);
+}
+
+template <>
+inline uint32_t to_host(uint32_t net)
+{
+    return ntohl(net);
+}
+
+//
+// Generic 'to_network()' and 'to_host()' instances.
+//
+
+// Reverse the bytes in the value.
+template <typename T>
+static inline T _change_endian(T value);
+
+template <typename T>
+inline T to_network(T host)
+{
+    return _change_endian(host);
+}
+
+template <typename T>
+inline T to_host(T net)
+{
+    return _change_endian(net);
+}
+
+template <typename T>
+static inline T _change_endian(T value)
+{
+    #if __BYTE_ORDER == __LITTLE_ENDIAN
+        uint8_t *value_bytes = (uint8_t *) &value;
+
+        for (int i = 0; i < sizeof (T) / 2; i++) {
+            swap<uint8_t>(
+                value_bytes[i], value_bytes[sizeof (T) - 1 - i]
+            );
+        }
+
+        return value;
+    #elif __BYTE_ORDER == __BIG_ENDIAN
+        return value;
+    #else
+        #error "Please set __BYTE_ORDER in <bits/endian.h>"
+    #endif
+}
 
 } } /* namespace tcp_mpipe::net */
 
