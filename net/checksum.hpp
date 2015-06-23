@@ -113,7 +113,7 @@ struct checksum_t {
     // Initializes to a zero value.
     inline checksum_t(void)
     {
-        this->value = 0;
+        this->value = net_t<uint16_t>::from_net(0);
     }
 
     // Computes the Internet Checksum of the given buffer.
