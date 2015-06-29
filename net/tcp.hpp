@@ -22,6 +22,7 @@
 #define __TCP_MPIPE_NET_TCP_HPP__
 
 #include <algorithm>                // min
+#include <cassert>
 #include <cstring>                  // equal_to, hash
 #include <functional>               // equal_to, hash
 #include <queue>
@@ -32,6 +33,7 @@
 
 #include "net/checksum.hpp"         // checksum(), partial_sum_t
 #include "net/endian.hpp"           // net_t, to_host()
+#include "util/macros.hpp"          // LIKELY(), UNLIKELY()
 
 using namespace std;
 
@@ -468,7 +470,9 @@ struct tcp_t {
 
                 switch (tcb->state) {
                 case tcb_t::SYN_SENT:
-                    this->_handle_syn_sent_state(saddr, hdr, payload, tcb);
+                    this->_handle_syn_sent_state(
+                        saddr, hdr, payload, tcb_id, tcb
+                    );
                     break;
                 case tcb_t::SYN_RECEIVED:
                     this->_handle_syn_received_state(hdr);
@@ -493,8 +497,6 @@ struct tcp_t {
                     break;
                 };
             }
-
-            TCP_DEBUG("MSS: %d", options.mss);
         });
     }
 
@@ -517,6 +519,12 @@ struct tcp_t {
 
 private:
 
+    // Common flags
+    static const flags_t _syn_flags;        // <SYN>
+    static const flags_t _syn_ack_flags;    // <SYN, ACK>
+    static const flags_t _ack_flags;        // <ACK>
+    static const flags_t _rst_ack_flags;    // <RST, ACK>
+
     // -------------------------------------------------------------------------
     //
     // TCP state machine handlers.
@@ -524,14 +532,16 @@ private:
     // Each handler is responsible of the processing of a received segment with
     // the connection in the corresponding state.
 
+    //
+    // LISTEN
+    //
+
     void _handle_listen_state(
         net_t<addr_t> saddr, const header_t *hdr, tcb_id_t tcb_id,
         options_t options, cursor_t payload, listen_t *listen
     )
     {
-        static flags_t valid_syn_flags(0, 1 /* ack */, 0, 0, 0, 0);
-
-        if (LIKELY(hdr->flags == valid_syn_flags && payload.is_empty())) {
+        if (LIKELY(hdr->flags == _syn_flags && payload.is_empty())) {
             // Valid (expected) segment.
             if (!listen->accept_queue.empty()) {
                 accept_callback_t callback = listen->accept_queue.front();
@@ -575,14 +585,14 @@ private:
         assert(p.second); // Emplace succeed.
         tcb_t *tcb = &p.first->second;
 
-        tcb->state      = tcb_t::SYN_RECEIVED;
+        tcb->state = tcb_t::SYN_RECEIVED;
 
         tcb->mss = this->network->max_payload_size - HEADER_SIZE;
         if (options.mss != options_t::NO_MSS_OPTION)
             tcb->mss = min(tcb->mss, (mss_t) options.mss);
 
-        tcb->rx_window  = { tcb->mss, hdr->seq.host() + 1 };
-        tcb->tx_window  = { hdr->window.host(), seq, seq + 1 };
+        tcb->rx_window = { tcb->mss, hdr->seq.host() + 1 };
+        tcb->tx_window = { hdr->window.host(), seq, seq + 1 };
 
         // Sends the SYN-ACK segment.
 
@@ -591,41 +601,71 @@ private:
         );
     }
 
+    //
+    // SYN-SENT
+    //
+
     void _handle_syn_sent_state(
-        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload, tcb_t *tcb
+        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload,
+        tcb_id_t tcb_id, tcb_t *tcb
     )
     {
-        if (UNLIKELY(hdr->flags.rst)) {
+        if (LIKELY(hdr->flags == _syn_ack_flags && payload.is_empty())) {
+            // Moves into the ESTABLISHED state if the segment correctly
+            // acknowledges the SYN segment we sent. Otherwise, emit a RST
+            // segment.
+
+            if (LIKELY(hdr->ack == tcb->tx_window.unack)) {
+                // Acknowledgement of our SYN segment, moves into the
+                // ESTABLISHED state and acknowledges the SYN segment we
+                // received.
+
+                tcb->state = tcb_t::ESTABLISHED;
+                return _handle_syn_sent_state_acknowledge_syn_segment(
+                    saddr, hdr, tcb
+                );
+            } else {
+                // Unexpected ACK number.
+                return this->_respond_with_rst_segment(saddr, hdr, payload);
+            }
+        } else if (hdr->flags == _syn_flags && payload.is_empty()) {
+            // We received a SYN segment without an ACK field. We move into
+            // the SYN-RECEIVED state and acknowledge the segment.
+
+            tcb->state = tcb_t::SYN_RECEIVED;
+            return _handle_syn_sent_state_acknowledge_syn_segment(
+                saddr, hdr, tcb
+            );
+        } else if (hdr->flags.rst) {
             // While in SYS-SENT, RST segments should be ignored if they don't
             // acknowledge the SYN segment we sent.
-            if (hdr->ack == tcb->tx_window.unack)
-                ;
-//                 return this->_destroy_tcb(tcb);
-        } else if (LIKELY(hdr->flags.syn)) {
-            if (LIKELY(hdr->flags.ack)) {
-                // We received a SYN-ACK segment. We must just check that the
-                // segment acknowledges the SYN segment we sent.
 
-                if (UNLIKELY(tcb->tx_window.unack != hdr->ack))
-                    // Unexpected ACK number.
-                    this->_respond_with_rst_segment(saddr, hdr, payload);
-            } else {
-                // We received a SYN segment without an ACK field. We move into
-                // the SYN-RECEIVED state and acknowledge the segment.
-
-                tcb->state = tcb_t::SYN_RECEIVED;
-                tcb->rx_window.size = hdr->window.host();
-                tcb->rx_window.next = hdr->seq.host() + 1;
-
-                this->_send_ack_segment(
-                    hdr->dport, saddr, hdr->sport,
-                    tcb->tx_window.next, tcb->rx_window.next
-                );
-            }
+            if (LIKELY(hdr->ack == tcb->tx_window.unack))
+                return this->_destroy_tcb(tcb_id);
         } else {
-            // Invalid segment.
+            // Invalid/Unexpected segment.
+            return this->_respond_with_rst_segment(saddr, hdr, payload);
         }
     }
+
+    // Updates the TCB's receiver window and acknowledges the received SYN
+    // segment
+    void _handle_syn_sent_state_acknowledge_syn_segment(
+        net_t<addr_t> saddr, const header_t *hdr, tcb_t *tcb
+    )
+    {
+        tcb->rx_window.size = hdr->window.host();
+        tcb->rx_window.next = hdr->seq.host() + 1;
+
+        this->_send_ack_segment(
+            hdr->dport, saddr, hdr->sport,
+            tcb->tx_window.next, tcb->rx_window.next
+        );
+    }
+
+    //
+    // SYN-RECEIVED
+    //
 
     void _handle_syn_received_state(const header_t *hdr)
     {
@@ -667,9 +707,10 @@ private:
     // TCB handling helpers
     //
 
-    // Close a connection.
-    void _destroy_tcb(tcb_id_t tcb_id, tcb_t tcb)
+    // Destroy resources allocated to a TCP connection.
+    void _destroy_tcb(tcb_id_t tcb_id)
     {
+        // TODO
     }
 
     // -------------------------------------------------------------------------
@@ -682,10 +723,8 @@ private:
         net_t<seq_t> seq, net_t<seq_t> ack
     )
     {
-        static flags_t flags(0, 1 /* ACK */, 0, 0, 1 /* SYN */, 0);
-
         this->_send_segment(
-            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
+            sport, daddr, dport, seq, ack, _syn_ack_flags, 0, cursor_t::EMPTY
         );
     }
 
@@ -694,13 +733,20 @@ private:
         net_t<seq_t> seq, net_t<seq_t> ack
     )
     {
-        static flags_t flags(0, 1 /* ACK */, 0, 0, 0, 0);
-
         this->_send_segment(
-            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
+            sport, daddr, dport, seq, ack, _ack_flags, 0, cursor_t::EMPTY
         );
     }
 
+    void _send_rst_segment(
+        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
+        net_t<seq_t> seq, net_t<seq_t> ack
+    )
+    {
+        this->_send_segment(
+            sport, daddr, dport, seq, ack, _rst_ack_flags, 0, cursor_t::EMPTY
+        );
+    }
 
     // Responds to a received segment with a RST segment.
     void _respond_with_rst_segment(
@@ -715,6 +761,8 @@ private:
         if (hdr->flags.ack)
             seq = hdr->ack;
         else
+            // RFC 793 specifies that RST responses to segment which don't
+            // acknowledge anything should have 0 as sequence number.
             seq.net = 0;
 
         // SYN and FIN flags must be acknowledged and thus "consume" one byte.
@@ -724,19 +772,7 @@ private:
         this->_send_rst_segment(hdr->dport, saddr, hdr->sport, seq, ack);
     }
 
-    void _send_rst_segment(
-        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack
-    )
-    {
-        static flags_t flags(0, 1 /* ACK */, 0, 1 /* RST */, 0, 0);
-
-        this->_send_segment(
-            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
-        );
-    }
-
-    // Pushs the given segment with its payload to the network layer.
+    // Pushes the given segment with its payload to the network layer.
     void _send_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
@@ -895,6 +931,27 @@ private:
         return network_t::data_link_t::phys_t::get_current_tcp_seq();
     }
 };
+
+//
+// Initializes common flags
+//
+
+template <typename network_t>
+const typename tcp_t<network_t>::flags_t
+tcp_t<network_t>::_syn_flags(0, 0, 0, 0, 1 /* SYN */, 0);
+
+template <typename network_t>
+const typename tcp_t<network_t>::flags_t
+tcp_t<network_t>::_syn_ack_flags(0, 1 /* ACK */, 0, 0, 1 /* SYN */, 0);
+
+template <typename network_t>
+const typename tcp_t<network_t>::flags_t
+tcp_t<network_t>::_ack_flags(0, 1 /* ACK */, 0, 0, 0, 0);
+
+template <typename network_t>
+const typename tcp_t<network_t>::flags_t
+tcp_t<network_t>::_rst_ack_flags(0, 1 /* ACK */, 0, 1 /* RST */, 0, 0);
+
 
 #undef TCP_COLOR
 #undef TCP_DEBUG
