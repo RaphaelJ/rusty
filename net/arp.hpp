@@ -26,6 +26,7 @@
 #include <functional>
 #include <unordered_map>
 #include <vector>
+#include <tuple>            // piecewise_construct, forward_as_tuple()
 #include <utility>          // move()
 
 #include <net/if_arp.h>     // ARPOP_REQUEST, ARPOP_REPLY
@@ -360,9 +361,12 @@ struct arp_t {
                 // request for this protocol address.
 
                 auto p = this->pending_reqs.emplace(
-                    proto_addr, pending_entry_t()
+                    piecewise_construct,
+                    forward_as_tuple(proto_addr), forward_as_tuple()
                 );
+                assert(p.second); // Emplace succeed.
                 pending_entry_t *entry = &p.first->second;
+
                 entry->callbacks.push_back(callback);
 
                 entry->timer = timers->schedule(
@@ -417,7 +421,7 @@ private:
             }
         );
 
-        cache_entry_t entry = { data_link_addr, timer_id };
+        cache_entry_t entry { data_link_addr, timer_id };
         auto inserted = this->addrs_cache.emplace(proto_addr, entry);
 
         if (!inserted.second) {

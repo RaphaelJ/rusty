@@ -42,9 +42,9 @@ static inline uint16_t _swap_bytes(uint16_t bytes);
 
 // Partially computed checksums.
 //
-// Can be computed with 'partial_sum()' and combined with an other partially
-// computed sum with 'partial_sum_append()'. The checksum can be then computed
-// from the partially computed sum with 'checksum_t()'.
+// Can be computed with 'partial_sum_t()' and combined with an other partially
+// computed sum with 'append()'. The checksum can be then computed from this
+// partially computed sum with 'checksum_t()'.
 struct partial_sum_t {
     uint16_t    sum;
 

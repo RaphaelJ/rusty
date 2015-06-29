@@ -21,9 +21,12 @@
 #ifndef __TCP_MPIPE_NET_TCP_HPP__
 #define __TCP_MPIPE_NET_TCP_HPP__
 
+#include <algorithm>                // min
+#include <cstring>                  // equal_to, hash
 #include <functional>               // equal_to, hash
 #include <queue>
 #include <tuple>
+#include <unordered_map>
 
 #include <netinet/tcp.h>            // TCPOPT_EOL, TCPOPT_NOP, TCPOPT_MAXSEG
 
@@ -95,6 +98,11 @@ struct tcp_t {
     // Segment size.
     typedef uint16_t                        seg_size_t;
 
+    // Maximum Segment Size
+    typedef uint16_t                        mss_t;
+
+    typedef uint16_t                        win_size_t;
+
     typedef typename network_t::cursor_t    cursor_t;
 
     // Uniquely identifies a TCP Control Block or a connection.
@@ -140,9 +148,9 @@ struct tcp_t {
         // ----+-------------------------------+-------------------------------
         //     \-------------------------------/
         //               Window size
-        struct {
-            uint16_t    size;
-            seq_t       next;   // Next sequence number to receive.
+        struct rx_window_t {
+            win_size_t  size;
+            seq_t       next;   // Next sequence number expected to receive.
         } rx_window;
 
         // Transmitter (sender) sliding window.
@@ -154,9 +162,9 @@ struct tcp_t {
         //  -------------+---------------------------+--------------------+-----
         //               \------------------------------------------------/
         //                                  Window size
-        struct {
-            uint16_t    size;
-            seq_t       unack;  // First sent but unacknowledged byte.
+        struct tx_window_t {
+            win_size_t  size;
+            seq_t       unack;  // First byte sent but unacknowledged byte.
             seq_t       next;   // Next sequence number to send.
         } tx_window;
 
@@ -197,7 +205,8 @@ struct tcp_t {
         // removed once they have been fully acknowledged.
         queue<tx_queue_entry_t> tx_queue;
 
-        size_t                  mss;    // Maximum segment size.
+        mss_t                   mss;    // Maximum segment size (TCP segment
+                                        // payload, without headers).
     };
 
     // Callback using in the call of 'accept()'.
@@ -224,48 +233,80 @@ struct tcp_t {
         size_t                      backlog;
     };
 
-    struct header_t {
-        net_t<port_t>   sport;      // Source port
-        net_t<port_t>   dport;      // Destination port
-        net_t<seq_t>    seq;        // Sequence number
-        net_t<seq_t>    ack;        // Acknowledgement number
-
+    struct flags_t {
         #if __BYTE_ORDER == __LITTLE_ENDIAN
-            uint8_t         res1:4;
-            uint8_t         doff:4; // Data offset. Number of 32 bits words
-                                    // before the payload.
+            uint8_t     fin:1;
+            uint8_t     syn:1;
+            uint8_t     rst:1;
+            uint8_t     psh:1;
+            uint8_t     ack:1;
+            uint8_t     urg:1;
+            uint8_t     res:2;
         #elif __BYTE_ORDER == __BIG_ENDIAN
-            uint8_t         doff:4;
-            uint8_t         res1:4;
+            uint8_t     res:2;
+            uint8_t     urg:1;
+            uint8_t     ack:1;
+            uint8_t     psh:1;
+            uint8_t     rst:1;
+            uint8_t     syn:1;
+            uint8_t     fin:1;
         #else
             #error "Please fix __BYTE_ORDER in <bits/endian.h>"
         #endif
 
-        struct flags_t {
-            #if __BYTE_ORDER == __LITTLE_ENDIAN
-                uint8_t     fin:1;
-                uint8_t     syn:1;
-                uint8_t     rst:1;
-                uint8_t     psh:1;
-                uint8_t     ack:1;
-                uint8_t     urg:1;
-                uint8_t     res2:2;
-            #elif __BYTE_ORDER == __BIG_ENDIAN
-                uint8_t     res2:2;
-                uint8_t     urg:1;
-                uint8_t     ack:1;
-                uint8_t     psh:1;
-                uint8_t     rst:1;
-                uint8_t     syn:1;
-                uint8_t     fin:1;
-            #else
-                #error "Please fix __BYTE_ORDER in <bits/endian.h>"
-            #endif
-        } __attribute__ ((__packed__)) flags;
+        // Initializes all the flags to zero.
+        inline flags_t(void)
+        {
+            memset(this, 0, sizeof (flags_t));
+        }
 
-        net_t<uint16_t> window;
-        checksum_t      check;
-        net_t<uint16_t> urg_ptr;
+        inline flags_t(
+            uint8_t _urg, uint8_t _ack, uint8_t _psh, uint8_t _rst,
+            uint8_t _syn, uint8_t _fin
+        )
+        {
+            this->res = 0;
+            this->urg = _urg;
+            this->ack = _ack;
+            this->psh = _psh;
+            this->rst = _rst;
+            this->syn = _syn;
+            this->fin = _fin;
+        }
+
+        // Compares two flags but ignores the reserved field.
+        friend inline bool operator==(flags_t a, flags_t b)
+        {
+            // Ignore the reserved field.
+            a.res = 0;
+            b.res = 0;
+
+            return !memcmp(&a, &b, sizeof (flags_t));
+        }
+    } __attribute__ ((__packed__)) flags;
+
+    struct header_t {
+        net_t<port_t>       sport;      // Source port
+        net_t<port_t>       dport;      // Destination port
+        net_t<seq_t>        seq;        // Sequence number
+        net_t<seq_t>        ack;        // Acknowledgement number
+
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            uint8_t             res:4;
+            uint8_t             doff:4; // Data offset. Number of 32 bits words
+                                        // before the payload.
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            uint8_t             doff:4;
+            uint8_t             res:4;
+        #else
+            #error "Please fix __BYTE_ORDER in <bits/endian.h>"
+        #endif
+
+        flags_t             flags;
+
+        net_t<win_size_t>   window;
+        checksum_t          check;
+        net_t<uint16_t>     urg_ptr;
     } __attribute__ ((__packed__));
 
     struct options_t {
@@ -402,72 +443,58 @@ struct tcp_t {
                 hdr->dport.host()
             );
 
+            // Processes the segment with the handler corresponding to the
+            // current state of the TCP connection.
+            //
+            // The two LISTEN and CLOSED states are handled separatly as there
+            // is no TCB for them.
+
             tcb_id_t tcb_id = { saddr, hdr->sport, hdr->dport };
             auto tcb_it = this->tcbs.find(tcb_id);
 
-            if (hdr->flags.syn) {
-                //
-                // SYN segment.
-                //
+            if (tcb_it == this->tcbs.end()) {
+                // No existing TCB for the connection.
 
-                // First, we need to check that the connection doesn't already
-                // exist and that the stack is listening on the port.
-                // If the connection already exists, we must assume that it's a
-                // delayed segment and we just re-emit the last ACK segment we
-                // we sent.
-                // If we are not listening on this port, we send a RST segment.
-                // If the connection doesn't exist but we are listening on this
-                // port, we create the connection.
+                auto listen_it = this->listens.find(hdr->dport);
 
-                if (tcb_it != this->tcbs.end()) {
-                    // The connection already exists.
+                if (LIKELY(listen_it != this->listens.end())) {
+                    this->_handle_listen_state(
+                        saddr, hdr, tcb_id, options, payload, &listen_it->second
+                    );
+                } else
+                    this->_handle_closed_state(saddr, hdr, payload);
+            } else {
+                tcb_t *tcb = &tcb_it->second;
 
-                    tcb_t *tcb = &tcb_it->second;
-                    seq_t ack = tcb->rx_window.next;
-                } else {
-                    auto listen_it = this->listens.find(hdr->sport);
-
-                    if (listen_it == this->listens.end()) {
-                        // The port is not open in LISTEN state.
-                        //
-                        // Responds with a RST segment. If the received segment
-                        // has an ACK number, then the RST segment has the value
-                        // of the ACK field as sequence number. If the received
-                        // segment does *not* have an ACK field, then the
-                        // segment has 0 as sequence number.
-                        //
-                        // The ACK field acknowledges for the received data
-                        // (received sequence number + length of the received
-                        // data).
-
-                        net_t<seq_t> seq;
-                        if (hdr->flags.ack)
-                            seq = hdr->ack;
-                        else
-                            seq.net = 0;
-
-                        this->_send_rst_segment(
-                            hdr->dport, saddr, hdr->sport, seq, hdr->seq + 1
-                        );
-
-//                         typename header_t::flags_t flags = { 0 };
-//                         flags.ack = 1;
-//                         flags.rst = 1;
-//                         this->_send_segment(
-//                             net_t<port_t>(80), saddr, net_t<port_t>(54202),
-//                             net_t<seq_t>(0), net_t<seq_t>(3779182750), flags,
-//                             net_t<uint16_t>(0), cursor_t::EMPTY
-//                         );
-                    } else {
-                        // The port is open in LISTEN state and the connection
-                        // doesn't exist. Creates a new TCB and sends a SYN/ACK.
-
-//                         listen_t->second
-                    }
-                }
-
-                TCP_DEBUG("MSS: %d", options.mss);
+                switch (tcb->state) {
+                case tcb_t::SYN_SENT:
+                    this->_handle_syn_sent_state(saddr, hdr, payload, tcb);
+                    break;
+                case tcb_t::SYN_RECEIVED:
+                    this->_handle_syn_received_state(hdr);
+                    break;
+                case tcb_t::ESTABLISHED:
+                    this->_handle_established_state(hdr);
+                    break;
+                case tcb_t::FIN_WAIT_1:
+                    this->_handle_fin_wait_1_state(hdr);
+                    break;
+                case tcb_t::FIN_WAIT_2:
+                    this->_handle_fin_wait_2_state(hdr);
+                    break;
+                case tcb_t::CLOSE_WAIT:
+                    this->_handle_close_wait_state(hdr);
+                    break;
+                case tcb_t::CLOSING:
+                    this->_handle_closing_state(hdr);
+                    break;
+                case tcb_t::LAST_ACK:
+                    this->_handle_last_ack_state(hdr);
+                    break;
+                };
             }
+
+            TCP_DEBUG("MSS: %d", options.mss);
         });
     }
 
@@ -489,7 +516,281 @@ struct tcp_t {
     
 
 private:
-    
+
+    // -------------------------------------------------------------------------
+    //
+    // TCP state machine handlers.
+    //
+    // Each handler is responsible of the processing of a received segment with
+    // the connection in the corresponding state.
+
+    void _handle_listen_state(
+        net_t<addr_t> saddr, const header_t *hdr, tcb_id_t tcb_id,
+        options_t options, cursor_t payload, listen_t *listen
+    )
+    {
+        static flags_t valid_syn_flags(0, 1 /* ack */, 0, 0, 0, 0);
+
+        if (LIKELY(hdr->flags == valid_syn_flags && payload.is_empty())) {
+            // Valid (expected) segment.
+            if (!listen->accept_queue.empty()) {
+                accept_callback_t callback = listen->accept_queue.front();
+                listen->accept_queue.pop();
+
+                this->_handle_listen_state_create_connection(
+                    saddr, hdr, tcb_id, options
+                );
+
+                return callback(tcb_id);
+            } else if (listen->pending_queue.size() < listen->backlog) {
+                listen->pending_queue.push(tcb_id);
+
+                return this->_handle_listen_state_create_connection(
+                    saddr, hdr, tcb_id, options
+                );
+            } else {
+                // There is no more room in the pending connection queue. The
+                // connection in actually in the CLOSED state.
+                return this->_handle_closed_state(saddr, hdr, payload);
+            }
+        } else
+            // Invalid segment.
+            return this->_respond_with_rst_segment(saddr, hdr, payload);
+    }
+
+    // Creates a TCB and responds to the received segment with a SYN-ACK
+    // segment.
+    void _handle_listen_state_create_connection(
+        net_t<addr_t> saddr, const header_t *hdr, tcb_id_t tcb_id,
+        options_t options
+    )
+    {
+        // Creates an initializes the TCB.
+
+        seq_t seq = _get_current_tcp_seq();
+
+        auto p = this->tcbs.emplace(
+            piecewise_construct, forward_as_tuple(tcb_id), forward_as_tuple()
+        );
+        assert(p.second); // Emplace succeed.
+        tcb_t *tcb = &p.first->second;
+
+        tcb->state      = tcb_t::SYN_RECEIVED;
+
+        tcb->mss = this->network->max_payload_size - HEADER_SIZE;
+        if (options.mss != options_t::NO_MSS_OPTION)
+            tcb->mss = min(tcb->mss, (mss_t) options.mss);
+
+        tcb->rx_window  = { tcb->mss, hdr->seq.host() + 1 };
+        tcb->tx_window  = { hdr->window.host(), seq, seq + 1 };
+
+        // Sends the SYN-ACK segment.
+
+        this->_send_syn_ack_segment(
+            hdr->dport, saddr, hdr->sport, seq, tcb->rx_window.next
+        );
+    }
+
+    void _handle_syn_sent_state(
+        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload, tcb_t *tcb
+    )
+    {
+        if (UNLIKELY(hdr->flags.rst)) {
+            // While in SYS-SENT, RST segments should be ignored if they don't
+            // acknowledge the SYN segment we sent.
+            if (hdr->ack == tcb->tx_window.unack)
+                ;
+//                 return this->_destroy_tcb(tcb);
+        } else if (LIKELY(hdr->flags.syn)) {
+            if (LIKELY(hdr->flags.ack)) {
+                // We received a SYN-ACK segment. We must just check that the
+                // segment acknowledges the SYN segment we sent.
+
+                if (UNLIKELY(tcb->tx_window.unack != hdr->ack))
+                    // Unexpected ACK number.
+                    this->_respond_with_rst_segment(saddr, hdr, payload);
+            } else {
+                // We received a SYN segment without an ACK field. We move into
+                // the SYN-RECEIVED state and acknowledge the segment.
+
+                tcb->state = tcb_t::SYN_RECEIVED;
+                tcb->rx_window.size = hdr->window.host();
+                tcb->rx_window.next = hdr->seq.host() + 1;
+
+                this->_send_ack_segment(
+                    hdr->dport, saddr, hdr->sport,
+                    tcb->tx_window.next, tcb->rx_window.next
+                );
+            }
+        } else {
+            // Invalid segment.
+        }
+    }
+
+    void _handle_syn_received_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_established_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_fin_wait_1_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_fin_wait_2_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_close_wait_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_closing_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_last_ack_state(const header_t *hdr)
+    {
+    }
+
+    void _handle_closed_state(
+        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload
+    )
+    {
+        this->_respond_with_rst_segment(saddr, hdr, payload);
+    }
+
+    // -------------------------------------------------------------------------
+    //
+    // TCB handling helpers
+    //
+
+    // Close a connection.
+    void _destroy_tcb(tcb_id_t tcb_id, tcb_t tcb)
+    {
+    }
+
+    // -------------------------------------------------------------------------
+    //
+    // Segment helpers
+    //
+
+    void _send_syn_ack_segment(
+        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
+        net_t<seq_t> seq, net_t<seq_t> ack
+    )
+    {
+        static flags_t flags(0, 1 /* ACK */, 0, 0, 1 /* SYN */, 0);
+
+        this->_send_segment(
+            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
+        );
+    }
+
+    void _send_ack_segment(
+        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
+        net_t<seq_t> seq, net_t<seq_t> ack
+    )
+    {
+        static flags_t flags(0, 1 /* ACK */, 0, 0, 0, 0);
+
+        this->_send_segment(
+            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
+        );
+    }
+
+
+    // Responds to a received segment with a RST segment.
+    void _respond_with_rst_segment(
+        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload
+    )
+    {
+        // The SEQ and ACK number are computed according to the SEQ and ACK
+        // number of the received segment so the remote TCP can identify the
+        // erroneous segment.
+
+        net_t<seq_t> seq;
+        if (hdr->flags.ack)
+            seq = hdr->ack;
+        else
+            seq.net = 0;
+
+        // SYN and FIN flags must be acknowledged and thus "consume" one byte.
+        net_t<seq_t> ack = hdr->seq + hdr->flags.syn + hdr->flags.fin
+                                    + payload.size();
+
+        this->_send_rst_segment(hdr->dport, saddr, hdr->sport, seq, ack);
+    }
+
+    void _send_rst_segment(
+        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
+        net_t<seq_t> seq, net_t<seq_t> ack
+    )
+    {
+        static flags_t flags(0, 1 /* ACK */, 0, 1 /* RST */, 0, 0);
+
+        this->_send_segment(
+            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
+        );
+    }
+
+    // Pushs the given segment with its payload to the network layer.
+    void _send_segment(
+        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
+        net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
+        net_t<uint16_t> window, cursor_t payload
+    )
+    {
+        net_t<addr_t> saddr = this->network->addr;
+        size_t seg_size = HEADER_SIZE + payload.size();
+
+        // Precomputes the sum of the pseudo header and of the payload.
+        partial_sum_t partial_sum =
+            network_t::tcp_pseudo_header_sum(
+                saddr, daddr, net_t<seg_size_t>(seg_size)
+            ).append(partial_sum_t(payload));
+
+        this->network->send_tcp_payload(
+        daddr, seg_size,
+        [sport, daddr, dport, seq, ack, flags, window, partial_sum]
+        (cursor_t cursor) {
+            _write_header(
+                cursor, sport, dport, seq, ack, flags, window, partial_sum
+            );
+        });
+    }
+
+    // Writes the TCP header starting at the given buffer cursor.
+    //
+    // 'partial_sum' is the sum of the pseudo TCP header and of the payload.
+    static cursor_t _write_header(
+        cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
+        net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
+        net_t<uint16_t> window, partial_sum_t partial_sum
+    )
+    {
+        return cursor.template write_with<header_t>(
+        [sport, dport, seq, ack, flags, window, partial_sum](header_t *hdr) {
+            hdr->sport   = sport;
+            hdr->dport   = dport;
+            hdr->seq     = seq;
+            hdr->ack     = ack;
+            hdr->res     = 0;
+            hdr->doff    = HEADER_SIZE / sizeof (uint32_t);
+            hdr->flags   = flags;
+            hdr->window  = window;
+            hdr->check   = checksum_t();
+            hdr->urg_ptr = 0;
+
+            hdr->check = checksum_t(
+                partial_sum.append(partial_sum_t(hdr, HEADER_SIZE))
+            );
+        });
+    }
+
+    // -------------------------------------------------------------------------
     //
     // TCP options
     //
@@ -549,9 +850,7 @@ private:
                         *status = MALFORMED_OPTIONS;
                         goto stop_parsing;
                     } else {
-                        uint16_t mss = to_host<uint16_t>(
-                            ((uint16_t *) data)[1]
-                        );
+                        mss_t mss = to_host<mss_t>(((mss_t *) data)[1]);
 
                         options.mss = (typename options_t::mss_option_t) mss;
 
@@ -582,74 +881,14 @@ private:
         return options;
     }
 
-    // Sends an empty TCP segment with the RST flag enabled.
-    void _send_rst_segment(
-        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack
-    )
+    // Writes the Maximum Segment Size option starting at the given buffer
+    // cursor.
+    static cursor_t _write_mss_option(cursor_t cursor, mss_t mss)
     {
-        typename header_t::flags_t flags = { 0 };
-        //flags.ack = 1;
-        flags.rst = 1;
-
-        this->_send_segment(
-            sport, daddr, dport, seq, ack, flags, 0, cursor_t::EMPTY
-        );
+        
     }
 
-    // Pushs the given segment with its payload to the network layer.
-    void _send_segment(
-        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack, typename header_t::flags_t flags,
-        net_t<uint16_t> window, cursor_t payload
-    )
-    {
-        net_t<addr_t> saddr = this->network->addr;
-        size_t seg_size = HEADER_SIZE + payload.size();
-
-        // Precomputes the sum of the pseudo header and of the payload.
-        partial_sum_t partial_sum =
-            network_t::tcp_pseudo_header_sum(
-                saddr, daddr, net_t<seg_size_t>(seg_size)
-            ).append(partial_sum_t(payload));
-
-        this->network->send_tcp_payload(
-        daddr, seg_size,
-        [sport, daddr, dport, seq, ack, flags, window, partial_sum]
-        (cursor_t cursor) {
-            _write_header(
-                cursor, sport, dport, seq, ack, flags, window, partial_sum
-            );
-        });
-    }
-
-    // Writes the TCP header starting at the given buffer cursor.
-    //
-    // 'partial_sum' is the sum of the pseudo TCP header and of the payload.
-    static cursor_t _write_header(
-        cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack, typename header_t::flags_t flags,
-        net_t<uint16_t> window, partial_sum_t partial_sum
-    )
-    {
-        return cursor.template write_with<header_t>(
-        [sport, dport, seq, ack, flags, window, partial_sum](header_t *hdr) {
-            hdr->sport   = sport;
-            hdr->dport   = dport;
-            hdr->seq     = seq;
-            hdr->ack     = ack;
-            hdr->res1    = 0;
-            hdr->doff    = HEADER_SIZE / sizeof (uint32_t);
-            hdr->flags   = flags;
-            hdr->window  = window;
-            hdr->check   = checksum_t();
-            hdr->urg_ptr = 0;
-
-            hdr->check = checksum_t(
-                partial_sum.append(partial_sum_t(hdr, HEADER_SIZE))
-            );
-        });
-    }
+    // -------------------------------------------------------------------------
 
     static inline seq_t _get_current_tcp_seq(void)
     {
