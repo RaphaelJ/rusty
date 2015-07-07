@@ -40,7 +40,7 @@ static inline uint16_t _swap_bytes(uint16_t bytes);
 // Partial sum
 //
 
-// Partially computed checksums.
+// Partially computed checksums. Used to compute a checksum incrementally.
 //
 // Can be computed with 'partial_sum_t()' and combined with an other partially
 // computed sum with 'append()'. The checksum can be then computed from this
@@ -51,7 +51,10 @@ struct partial_sum_t {
     // 'true' when the sum has been computed on an odd number of bytes.
     bool        odd;
 
-    // Initializes a zero bytes sum.
+    // Sum of an empty buffer.
+    static const partial_sum_t ZERO;
+
+    // Initializes the partial sum to zero (sum of an empty buffer).
     inline partial_sum_t(void)
     {
         this->sum = 0;
@@ -110,10 +113,13 @@ struct partial_sum_t {
 struct checksum_t {
     net_t<uint16_t> value;
 
-    // Initializes to a zero value.
+    // Checksum of an empty buffer.
+    static const checksum_t ZERO;
+
+    // Initializes the checksum to zero (checksum of an empty buffer).
     inline checksum_t(void)
     {
-        this->value = net_t<uint16_t>::from_net(0);
+        this->value.net = 0;
     }
 
     // Computes the Internet Checksum of the given buffer.

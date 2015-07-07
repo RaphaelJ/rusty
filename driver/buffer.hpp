@@ -179,7 +179,7 @@ struct cursor_t {
     inline cursor_t read(char *data, size_t n) const
     {
         assert(can(n));
-        cursor_t    cursor      = *this;
+        cursor_t cursor = *this;
 
         while (n >= cursor.current_size) {
             memcpy(data, cursor.current, cursor.current_size);
@@ -202,34 +202,30 @@ struct cursor_t {
         return read((char *) data, sizeof (T));
     }
 
-    // Writes one instance of the given type. There must be enough bytes in the
-    // buffer to write the item (see 'can()').
-    //
-    // Returns a new buffer which references the data following what has been
-    // written.
-    //
-    // Complexity: O(n) where 'n' is the number of bytes to read.
-    template <typename T>
-    inline cursor_t write(const T *data) const
+    inline cursor_t write(const char *data, size_t n) const
     {
-        assert(can<T>());
+        assert(can(n));
+        cursor_t cursor = *this;
 
-        const char  *data_char = (const char *) data;
-        cursor_t    cursor     = *this;
-        size_t      to_write   = sizeof (T);
-
-        while (to_write >= cursor.current_size) {
-            memcpy(cursor.current, data_char, cursor.current_size);
+        while (n >= cursor.current_size) {
+            memcpy(cursor.current, data, cursor.current_size);
             cursor = cursor._next_buffer();
-            to_write -= cursor.current_size;
+            n -= cursor.current_size;
         }
 
-        if (to_write > 0) {
-            memcpy(cursor.current, data_char, to_write);
-            cursor = cursor._drop_in_buffer(to_write);
+        if (n > 0) {
+            memcpy(cursor.current, data, n);
+            cursor = cursor._drop_in_buffer(n);
         }
 
         return cursor;
+    }
+
+    // Equivalent to 'write(data, sizeof (T))'.
+    template <typename T>
+    inline cursor_t write(const T *data) const
+    {
+        return write((const char *) data, sizeof (T));
     }
 
     // -------------------------------------------------------------------------
@@ -375,7 +371,7 @@ struct cursor_t {
         });
     }
 
-    // Gives a pointer to write one instance of the data to the function.
+    // Gives a pointer to write 'n' bytes of data to the function.
     //
     // Will directly reference the buffer's memory if it's possible
     // ('can_in_place()'), will gives a reference to a copy otherwise.
@@ -384,6 +380,22 @@ struct cursor_t {
     //
     // Complexity: O(1) (best-case) or O(n) (worst-case) where 'n' is the number
     // of bytes to write.
+    inline cursor_t write_with(function<void(char *)> f, size_t n)
+    {
+        if (can_in_place(n)) {
+            char *p;
+            cursor_t cursor = in_place(&p, n);
+            f(p);
+            return cursor;
+        } else {
+            assert(can(n));
+            char data[n];
+            f(data);
+            return write(data, n);
+        }
+    }
+
+    // Equivalent to 'write_with(f, sizeof (T))'.
     template <typename T>
     inline cursor_t write_with(function<void(T *)> f)
     {

@@ -31,6 +31,10 @@
 namespace tcp_mpipe {
 namespace net {
 
+const partial_sum_t partial_sum_t::ZERO = partial_sum_t();
+
+const checksum_t    checksum_t::ZERO    = checksum_t();
+
 uint16_t _ones_complement_sum(const void *data, size_t size)
 {
     // The 16 bits ones' complement sum is the ones' complement addition of

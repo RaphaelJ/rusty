@@ -297,8 +297,8 @@ private:
 };
 
 template <typename phys_t>
-const net_t<typename ethernet_t<phys_t>::addr_t> ethernet_t<phys_t>::BROADCAST_ADDR =
-    { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
+const net_t<typename ethernet_t<phys_t>::addr_t>
+ethernet_t<phys_t>::BROADCAST_ADDR = { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
 
 #undef ETH_COLOR
 #undef ETH_DEBUG
