@@ -74,6 +74,18 @@ int main(int argc, char **argv)
     // Tests the allocator.
     tile_allocator_t<int> allocator();
 
+    mpipe.data_link.ipv4.tcp.listen(80, 
+        [](mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
+            return [](mpipe_t::tcp_mpipe_t::cursor_t data) {
+                while (!data.empty()) {
+                    char c;
+                    data = data.read(&c, 1);
+                    printf("%c", c);
+                }
+            };
+        }
+    );
+
     // Runs the application.
     mpipe.run();
 

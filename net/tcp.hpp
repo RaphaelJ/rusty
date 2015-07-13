@@ -714,6 +714,15 @@ private:
     // Each handler is responsible of the processing of a received segment with
     // the connection in the corresponding state.
 
+    #define TCP_DEBUG_STATE_CHANGE(from, to)                                   \
+        do {                                                                   \
+            TCP_DEBUG(                                                         \
+                "State change for %s:%" PRIu16 " on local port %" PRIu16 ": "  \
+                from " -> " to, network_t::addr_t::to_alpha(saddr),            \
+                hdr->sport.host(), hdr->dport.host()                           \
+            );                                                                 \
+        } while (0);
+
     //
     // LISTEN
     //
@@ -736,6 +745,8 @@ private:
             // Creates the TCB in the SYN-RECEIVED state and responds to the
             // segment with a SYN-ACK segment. Notifies the application of the
             // new connection.
+
+            TCP_DEBUG_STATE_CHANGE("LISTEN", "SYN-RECEIVED");
 
             //
             // Creates an initializes the TCB.
@@ -778,7 +789,7 @@ private:
             //
 
             this->_send_syn_ack_segment(
-                hdr->dport, saddr, hdr->sport, iss, tcb->rx_window.next,
+                hdr->dport, saddr, hdr->sport, tcb, iss, tcb->rx_window.next,
                 tcb->rx_window.size
             );
 
@@ -853,6 +864,8 @@ private:
                 // Moves into the ESTABLISHED state and acknowledges the
                 // received SYN segment.
 
+                TCP_DEBUG_STATE_CHANGE("SYN-SENT", "ESTABLISHED");
+
                 tcb->state = tcb_t::ESTABLISHED;
 
                 seq_t irs = hdr->seq.host(); // Initial Receiver Sequence
@@ -887,6 +900,9 @@ private:
             } else if (LIKELY(hdr->flags.syn)) {
                 // Moves into the SYN-RECEIVED state and acknowledges the
                 // segment by re-emiting a SYN-ACK segment.
+
+                TCP_DEBUG_STATE_CHANGE("SYN-SENT", "SYN-RECEIVED");
+
                 tcb->state = tcb_t::SYN_RECEIVED;
 
                 seq_t irs = hdr->seq.host(); // Initial Receiver Sequence
@@ -898,7 +914,7 @@ private:
                 tcb->tx_window.size  = hdr->window.host();
 
                 this->_send_syn_ack_segment(
-                    hdr->dport, saddr, hdr->sport,
+                    hdr->dport, saddr, hdr->sport, tcb,
                     tcb->tx_window.next, tcb->rx_window.next, tcb->mss
                 );
 
@@ -990,6 +1006,9 @@ private:
             if (LIKELY(acceptable_ack)) {
                 // Our SYN has been acknowledged, moves into the ESTABLISHED
                 // state.
+
+                TCP_DEBUG_STATE_CHANGE("SYN-RECEIVED", "ESTABLISHED");
+
                 tcb->state          = tcb_t::ESTABLISHED;
                 tcb->tx_window.size = hdr->window.host();
                 tcb->tx_window.wl1  = seq;
@@ -1032,8 +1051,12 @@ private:
 
             // When in the FIN-WAIT-1 state, if the FIN is acknowledged, enters
             // the FIN-WAIT-2 state.
-            if (tcb->in_state(tcb_t::FIN_WAIT_1) && ack == tcb->tx_window.next)
+            if (
+                tcb->in_state(tcb_t::FIN_WAIT_1) && ack == tcb->tx_window.next
+            ) {
+                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "FIN-WAIT-2");
                 tcb->state = tcb_t::FIN_WAIT_2;
+            }
 
             // When in the FIN-WAIT-2 state, if the retransmission queue is
             // empty, the application layer can be notified that the connection
@@ -1045,9 +1068,10 @@ private:
             // When in the CLOSING state, if the FIN is acknowledged, enters
             // the TIME-WAIT state, otherwise, ignore the segment.
             if (tcb->in_state(tcb_t::CLOSING)) {
-                if (ack == tcb->tx_window.next)
+                if (ack == tcb->tx_window.next) {
+                    TCP_DEBUG_STATE_CHANGE("CLOSING", "TIME-WAIT");
                     tcb->state = tcb_t::TIME_WAIT;
-                else
+                } else
                     IGNORE_SEGMENT("in CLOSING state");
             }
 
@@ -1092,6 +1116,7 @@ private:
 
             switch (tcb->state) {
             case tcb_t::ESTABLISHED:
+                TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSE-WAIT");
                 tcb->state = tcb_t::CLOSE_WAIT;
                 break;
             case tcb_t::FIN_WAIT_1:
@@ -1104,9 +1129,11 @@ private:
 
                 assert(ack != tcb->tx_window.next);
 
+                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSING");
                 tcb->state = tcb_t::CLOSING;
                 break;
             case tcb_t::FIN_WAIT_2:
+                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "TIME-WAIT");
                 tcb->state = tcb_t::TIME_WAIT;
 
                 // TODO: Start the time-wait timer, turn off the other timers.
@@ -1124,6 +1151,7 @@ private:
     }
 
     #undef IGNORE_SEGMENT
+    #undef TCP_DEBUG_STATE_CHANGE
 
     // -------------------------------------------------------------------------
     //
@@ -1265,22 +1293,24 @@ private:
 
     void _send_syn_ack_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack, mss_t mss
+        const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack, mss_t mss
     )
     {
         options_t options = { (typename options_t::mss_option_t) mss };
         this->_send_segment(
-            sport, daddr, dport, seq, ack, _SYN_ACK_FLAGS, 0, options
+            sport, daddr, dport, seq, ack, _SYN_ACK_FLAGS,
+            net_t<win_size_t>(tcb->rx_window.size), options
         );
     }
 
     void _send_ack_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack
+        const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack
     )
     {
         this->_send_segment(
-            sport, daddr, dport, seq, ack, _ACK_FLAGS, 0, EMPTY_OPTIONS
+            sport, daddr, dport, seq, ack, _ACK_FLAGS,
+            net_t<win_size_t>(tcb->rx_window.size), EMPTY_OPTIONS
         );
     }
 
@@ -1293,7 +1323,7 @@ private:
     )
     {
         this->_send_ack_segment(
-            hdr->dport, saddr, hdr->sport,
+            hdr->dport, saddr, hdr->sport, tcb,
             tcb->tx_window.next, tcb->rx_window.next
         );
     }
@@ -1352,7 +1382,7 @@ private:
     void _send_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
-        net_t<uint16_t> window, options_t options
+        net_t<win_size_t> window, options_t options
     )
     {
         net_t<addr_t> saddr = this->network->addr;
@@ -1374,7 +1404,7 @@ private:
 
             auto ret = _write_options(cursor.drop(HEADER_SIZE), options);
             cursor = ret.first;
-            partial_sum_t options_sum;
+            partial_sum_t options_sum = ret.second;
 
             partial_sum_t partial_sum = pseudo_hdr_sum.append(options_sum);
 
@@ -1390,7 +1420,7 @@ private:
     static cursor_t _write_header(
         cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
-        net_t<uint16_t> window, partial_sum_t partial_sum
+        net_t<win_size_t> window, partial_sum_t partial_sum
     );
 
     // -------------------------------------------------------------------------

@@ -405,6 +405,7 @@ private:
             hdr->frag_off = FRAG_OFF_NET;
             hdr->ttl      = IPDEFTTL;
             hdr->protocol = protocol;
+            hdr->check    = checksum_t::ZERO;
             hdr->saddr    = this->addr;
             hdr->daddr    = dst;
 

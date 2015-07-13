@@ -422,6 +422,7 @@ void mpipe_t::run(void)
         timers.tick();
 
         gxio_mpipe_idesc_t idesc;
+
         int ret = gxio_mpipe_iqueue_try_get(&this->iqueue, &idesc);
 
         if (ret == GXIO_MPIPE_ERR_IQUEUE_EMPTY) // Queue is empty. Retries.
