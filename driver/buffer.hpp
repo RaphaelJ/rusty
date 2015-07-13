@@ -93,7 +93,7 @@ struct cursor_t {
     // True if there is nothing more to read.
     //
     // Complexity: O(1).
-    inline bool is_empty(void) const
+    inline bool empty(void) const
     {
         if (current_size == 0) {
             assert(next_size == 0);
@@ -419,7 +419,7 @@ struct cursor_t {
     {
         cursor_t cursor = *this;
 
-        while (!cursor.is_empty()) {
+        while (!cursor.empty()) {
             f(cursor.current, cursor.current_size);
             cursor = cursor._next_buffer();
         }

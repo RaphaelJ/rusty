@@ -213,7 +213,7 @@ struct mpipe_t {
         // (~ 4 µs).
         static const cycles_t DELAY = CYCLES_PER_SECOND * 4 / 1000000;
 
-        return (tcp_mpipe_t::seq_t) (get_cycle_count() / DELAY);
+        return tcp_mpipe_t::seq_t((uint32_t) get_cycle_count() / DELAY);
     }
 
 private:

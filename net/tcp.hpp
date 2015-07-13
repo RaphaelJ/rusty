@@ -30,7 +30,7 @@
 #include <queue>
 #include <tuple>
 #include <unordered_map>
-#include <utility>                  // pair
+#include <utility>                  // pair, swap()
 
 #include <netinet/tcp.h>            // TCPOPT_EOL, TCPOPT_NOP, TCPOPT_MAXSEG
 
@@ -98,14 +98,88 @@ struct tcp_t {
     typedef uint16_t                                port_t;
 
     // Sequence number.
-    //
-    // Unsigned arithmetic overflows in C reduced to the operation modulo the
-    // largest type's integer plus one. Thus we can expect our sequence numbers
-    // to correctly wrap around when using standard arithmetic operators.
-    //
-    // The only thing one must pay attention is how to check that a sequence
-    // number is inside a window.
-    typedef uint32_t                                seq_t;
+    struct seq_t {
+        uint32_t    value;
+
+        seq_t(void) { }
+
+        seq_t(int _value) : value((uint32_t) _value) { }
+
+        seq_t(uint16_t _value) : value((uint32_t) _value) { }
+
+        seq_t(uint32_t _value) : value((uint32_t) _value) { }
+
+        seq_t(size_t _value) : value((uint32_t) _value) { }
+
+        // Unsigned arithmetic overflows in C reduced to the operation modulo
+        // the largest type's integer plus one (4294967296). Thus we can expect
+        // our sequence numbers to correctly wrap around when using standard
+        // arithmetic operators. i.e '10 - 4294967295 = 11'.
+
+        friend inline seq_t operator+(seq_t a, seq_t b)
+        {
+            return { a.value + b.value };
+        }
+
+        friend inline seq_t operator-(seq_t a, seq_t b)
+        {
+            return a.value - b.value;
+        }
+
+        inline seq_t operator++(void)
+        {
+            value++;
+            return *this;
+        }
+
+        inline seq_t operator+=(seq_t other)
+        {
+            value += other.value;
+            return *this;
+        }
+
+        friend inline bool operator==(seq_t a, seq_t b)
+        {
+            return a.value == b.value;
+        }
+
+        friend inline bool operator!=(seq_t a, seq_t b)
+        {
+            return a.value != b.value;
+        }
+
+        // Relative operators (used to check that a sequence number is inside a
+        // window) require more attention . As the sequence number domain is
+        // cyclic, a smaller sequence number can be greater than a  larger
+        // sequence number. We consider that a sequence number is smaller than
+        // another iff the difference between the number and the other is larger
+        // than the half of the number of sequence numbers (> 2147483648).
+        //
+        // That is, 10 is larger than 4000000000, but 10 is smaller than
+        // 2000000000.
+        //
+        // This idea has been taken from and used by lwIP.
+
+        friend inline bool operator<(seq_t a, seq_t b)
+        {
+            return ((uint32_t) (a - b).value) < 0;
+        }
+
+        friend inline bool operator<=(seq_t a, seq_t b)
+        {
+            return ((uint32_t) (a - b).value) <= 0;
+        }
+
+        friend inline bool operator>(seq_t a, seq_t b)
+        {
+            return ((uint32_t) (a - b).value) < 0;
+        }
+
+        friend inline bool operator>=(seq_t a, seq_t b)
+        {
+            return ((uint32_t) (a - b).value) <= 0;
+        }
+    } __attribute__ ((__packed__));
 
     // Segment size.
     typedef uint16_t                                seg_size_t;
@@ -115,200 +189,7 @@ struct tcp_t {
 
     typedef uint16_t                                win_size_t;
 
-    typedef typename network_t::cursor_t            cursor_t;
-
-    // Uniquely identifies a TCP Control Block or a connection.
-    typedef tcp_tcb_id_t<addr_t, port_t>            tcb_id_t;
-
-    // Callback called on an open connection when it receives data.
-    typedef function<void(cursor_t)>                new_data_callback_t;
-
-    // Callback called on new connections on a port open in the LISTEN state.
-    //
-    // The function is given the identifier of the new established connection.
-    typedef function<new_data_callback_t(tcb_id_t)> new_connection_callback_t;
-
-    // TCP Control Block.
-    //
-    // Contains information to track an established TCP connection. Each TCB is
-    // uniquely identified by a 'tcb_id_t'.
-    struct tcb_t {
-        enum state_t {
-            SYN_SENT,       // Waiting for a matching connection request after
-                            // having sent a connection request.
-            SYN_RECEIVED,   // Waiting for a confirming connection request
-                            // acknowledgment after having both received and
-                            // sent a connection request.
-            ESTABLISHED,    // Open connection, data received can be delivered
-                            // to the user.
-            FIN_WAIT_1,     // Waiting for a connection termination request
-                            // from the remote TCP, or an acknowledgment of the
-                            // connection termination request previously sent.
-            FIN_WAIT_2,     // Waiting for a connection termination request
-                            // from the remote TCP.
-            CLOSE_WAIT,     // Waiting for a connection termination request
-                            // from the local user.
-            CLOSING,        // Waiting for a connection termination request
-                            // acknowledgment from the remote TCP.
-            LAST_ACK        // Waiting for an acknowledgment of the connection
-                            // termination request previously sent to the remote
-                            // TCP (which includes an acknowledgment of its
-                            // connection termination request).
-        } state;
-
-        mss_t                   mss;    // Maximum segment size (TCP segment
-                                        // payload, without headers).
-
-        //
-        // Sliding windows
-        //
-
-        // Receiver sliding window.
-        //
-        //     |> Next expected sequence number
-        // ----+-------------------------------+-------------------------------
-        //     |    Receiver sliding window    |
-        // ----+-------------------------------+-------------------------------
-        //     \-------------------------------/
-        //               Window size
-        struct rx_window_t {
-            seq_t       init;   // Initial Sequence Number (ISN) of the remote.
-            win_size_t  size;
-            seq_t       next;   // Next sequence number expected to receive.
-
-            // Returns 'true' if the given sequence number is inside this
-            // receiver window (next <= seq < next + size).
-            inline bool in_window(seq_t seq) const
-            {
-                seq_t end = next + size;
-                if (next < end) // No sequence number overflow
-                    return seq >= next && seq < end;
-                else
-                    return seq >= next || seq < end;
-            }
-
-            // Returns 'true' if the received segment is acceptable with the
-            // current state of the window as defined in RFC 793 (page 69):
-            //
-            // Length  Window   Segment Receive  Test
-            // ------- -------  -------------------------------------------
-            // 0       0        seq == next
-            // 0       >0       next <= seq < next + size
-            // >0      0        false
-            // >0      >0          next <= seq < next + size
-            //                  || next <= seq + payload_size - 1 < next + size
-            inline bool acceptable_seq(seq_t seq, size_t payload_size) const
-            {
-                if (size >= 0)
-                    return    in_window(seq)
-                           || (   payload_size > 0
-                               && in_window(seq + payload_size - 1));
-                else
-                    return payload_size == 0 && seq == next;
-            }
-
-            // Returns 'true' if the received segment contains at least the next
-            // byte to receive
-            // (payload_size > 0 && seq <= next < seq + payload_size).
-            inline bool contains_next(seq_t seq, size_t payload_size) const
-            {
-                seq_t end = seq + payload_size;
-                if (seq < end) // No sequence number overflow
-                    return /* payload_size > 0 && */ next >= seq && next < end;
-                else
-                    return next >= seq || next < end;
-            }
-        } rx_window;
-
-        // Transmitter (sender) sliding window.
-        //
-        //               |> First sent but unacknowledged byte
-        //             Next sequence number to send <|
-        //  -------------+---------------------------+--------------------+-----
-        //  Acknowledged | Sent but not acknowledged | Not sent but ready |
-        //  -------------+---------------------------+--------------------+-----
-        //               \------------------------------------------------/
-        //                                  Window size
-        struct tx_window_t {
-            seq_t       init;   // Initial Sequence Number (ISN) of the local.
-            win_size_t  size;
-            seq_t       unack;  // First sent but unacknowledged byte.
-            seq_t       next;   // Next sequence number to send.
-
-            // Returns 'true' if the given sequence number is inside this
-            // receiver window (unack <= seq <= unack + size).
-            inline bool in_window(seq_t seq) const
-            {
-                if (unack < unack + size) // No sequence number overflow
-                    return seq >= unack && seq < unack + size;
-                else
-                    return    seq >= unack
-                           || seq < size - (UINT32_MAX - unack + 1);
-            }
-
-            // Returns 'true' if the given sequence number is something already
-            // sent but not yet acknowledged (unack < ack <= next).
-            inline bool acceptable_ack(seq_t ack) const
-            {
-                if (unack <= next) // No sequence number overflow
-                    return ack > unack && ack <= next;
-                else
-                    return ack > unack || ack <= next;
-            }
-        } tx_window;
-
-        //
-        // Receiving queue
-        //
-
-        // Contains segment payloads which have not been transmitted to the
-        // application layer nor acknowledged as they have been delivered out of
-        // order. The 'seq_t' key gives the segment number of the first byte of
-        // the cursor.
-        map<seq_t, cursor_t>    out_of_order;
-
-        // Function provided by the application layer which will be called each
-        // time new data is received.
-        new_data_callback_t     new_data_callback;
-
-        //
-        // Transmission queue
-        //
-        // The queue contains entries which are waiting to be sent and entries
-        // which have been sent but not acknowledged.
-        //
-        // The queue is composed of functions instead of buffer. These functions
-        // are able to write a determined amount of bytes in network buffers
-        // just before the transmission.
-        //
-
-        // A queue entry contains a function able to write data from 'seq' to
-        // 'seq' + 'size'. The 'acked' function is called once the whole entry
-        // has been transmitted and acknowledged.
-        struct tx_queue_entry_t {
-            seq_t                               seq;
-            size_t                              size;
-
-            // Function provided by the user to write data into transmission
-            // buffers. The first function argument gives the offset (against
-            // 'seq'). The number of bytes to write is given by the cursor size.
-            //
-            // The function could be called an undefined number of times because
-            // of packet segmentation and retransmission.
-            function<void(size_t, cursor_t)>    writer;
-
-            // Function which is called once all the data provided by the writer
-            // has been acked and the queue entry removed.
-            function<void()>                    acked;
-        };
-
-        // Transmission queue.
-        //
-        // Entries are sorted in increasing sequence number order and will be
-        // removed once they have been fully acknowledged.
-        queue<tx_queue_entry_t> tx_queue;
-    };
-
+    // TCP header tags.
     struct flags_t {
         #if __BYTE_ORDER == __LITTLE_ENDIAN
             uint8_t     fin:1;
@@ -400,6 +281,227 @@ struct tcp_t {
         }
     };
 
+    typedef typename network_t::cursor_t            cursor_t;
+
+    // Uniquely identifies a TCP Control Block or a connection.
+    typedef tcp_tcb_id_t<addr_t, port_t>            tcb_id_t;
+
+    // Callback called on an open connection when it receives data.
+    typedef function<void(cursor_t)>                new_data_callback_t;
+
+    // Callback called on new connections on a port open in the LISTEN state.
+    //
+    // The function is given the identifier of the new established connection.
+    typedef function<new_data_callback_t(tcb_id_t)> new_connection_callback_t;
+
+    // TCP Control Block.
+    //
+    // Contains information to track an established TCP connection. Each TCB is
+    // uniquely identified by a 'tcb_id_t'.
+    struct tcb_t {
+        enum state_t : int {
+            // Waiting for a matching connection request after having sent a
+            // connection request.
+            SYN_SENT     = 1 << 0,
+            // Waiting for a confirming connection request acknowledgment after
+            // having both received and sent a connection request.
+            SYN_RECEIVED = 1 << 1,
+            // Open connection, data received can be delivered to the user.
+            ESTABLISHED  = 1 << 2,
+            // Waiting for a connection termination request from the remote TCP,
+            // or an acknowledgment of the connection termination request
+            // previously sent.
+            FIN_WAIT_1   = 1 << 3,
+            // Waiting for a connection termination request from the remote TCP.
+            FIN_WAIT_2   = 1 << 4,
+            // Waiting for a connection termination request from the local user.
+            CLOSE_WAIT   = 1 << 5,
+            // Waiting for a connection termination request acknowledgment from
+            // the remote TCP.
+            CLOSING      = 1 << 6,
+            // Waiting for an acknowledgment of the connection termination
+            // request previously sent to the remote TCP (which includes an
+            // acknowledgment of its connection termination request).
+            LAST_ACK     = 1 << 7,
+            // Waiting for enough time to pass to be sure the remote TCP
+            // received the acknowledgment of its connection termination
+            // request.
+            TIME_WAIT    = 1 << 8
+        } state;
+
+        inline friend state_t operator|(state_t a, state_t b)
+        {
+            return (state_t) ((int) a | (int) b);
+        }
+
+        mss_t                   mss;    // Maximum segment size (TCP segment
+                                        // payload, without headers).
+
+        //
+        // Sliding windows
+        //
+
+        // Receiver sliding window.
+        //
+        //     |> Next expected sequence number
+        // ----+-------------------------------+-------------------------------
+        //     |    Receiver sliding window    |
+        // ----+-------------------------------+-------------------------------
+        //     \-------------------------------/
+        //               Window size
+        struct rx_window_t {
+            seq_t       init;   // Initial Sequence Number (ISN) of the remote.
+            win_size_t  size;
+            seq_t       next;   // Next sequence number expected to receive.
+
+            // Returns 'true' if the given sequence number is inside this
+            // receiver window (next <= seq < next + size).
+            inline bool in_window(seq_t seq) const
+            {
+                return (seq - next).value < size;
+            }
+
+            // Returns 'true' if the received segment is acceptable with the
+            // current state of the window as defined in RFC 793 (page 69):
+            //
+            // Length  Window   Segment Receive  Test
+            // ------- -------  -------------------------------------------
+            // 0       0        seq == next
+            // 0       >0       next <= seq < next + size
+            // >0      0        false
+            // >0      >0          next <= seq < next + size
+            //                  || next <= seq + payload_size - 1 < next + size
+            inline bool acceptable_seg(seq_t seq, size_t payload_size) const
+            {
+                if (size >= 0)
+                    return    in_window(seq)
+                           || (   payload_size > 0
+                               && in_window(seq + seq_t(payload_size) - 1));
+                else
+                    return payload_size == 0 && seq == next;
+            }
+
+            // Returns 'true' if the received segment contains at least the next
+            // byte to receive
+            // (payload_size > 0 && seq <= next < seq + payload_size).
+            inline bool contains_next(seq_t seq, size_t payload_size) const
+            {
+                return payload_size > (next - seq).value;
+            }
+        } rx_window;
+
+        // Transmitter (sender) sliding window.
+        //
+        //               |> First sent but unacknowledged byte
+        //             Next sequence number to send <|
+        //  -------------+---------------------------+--------------------+-----
+        //  Acknowledged | Sent but not acknowledged | Not sent but ready |
+        //  -------------+---------------------------+--------------------+-----
+        //               \------------------------------------------------/
+        //                                  Window size
+        struct tx_window_t {
+            seq_t       init;   // Initial Sequence Number (ISN) of the local.
+            win_size_t  size;
+            seq_t       unack;  // First sent but unacknowledged byte.
+            seq_t       next;   // Next sequence number to send.
+            seq_t       wl1;    // Received sequence number of the last segment
+                                // used to update 'size'.
+            seq_t       wl2;    // Received acknowledgment number of the last 
+                                // segment used to update 'size'.
+
+            // Returns 'true' if the given sequence number is inside this
+            // receiver window (unack <= seq <= unack + size).
+            inline bool in_window(seq_t seq) const
+            {
+                return (seq - unack).value < size;
+            }
+
+            // Returns 'true' if the given sequence number is something already
+            // sent but not yet acknowledged (unack < ack <= next).
+            inline bool acceptable_ack(seq_t ack) const
+            {
+                return unack < ack && ack <= next;
+            }
+
+            // Updates the sender window size and the values of 'wl1' and 'wl2'
+            // if 'wl1 < seq || (wl1 == seq && wl2 <= ack)' (this prevents old
+            // segments to update the window).
+            void update_window_size(seq_t seq, seq_t ack, win_size_t size)
+            {
+                if (wl1 < seq || (wl1 == seq && wl2 <= ack)) {
+                    size = size;
+                    wl1  = seq;
+                    wl2  = ack;
+                }
+            }
+        } tx_window;
+
+        //
+        // Receiving queue
+        //
+
+        // Contains a segment's payload (without TCP headers) which has been
+        // delivered out of order.
+        //
+        // The 'seq_t' key gives the segment number of the first byte of the 
+        // cursor.
+        struct out_of_order_segment_t {
+            seq_t       seq;
+            cursor_t    payload;
+        };
+
+        // Contains segment payloads which have not been transmitted to the
+        // application layer nor acknowledged because they have been delivered
+        // out of order.
+        vector<out_of_order_segment_t>  out_of_order;
+
+        // Function provided by the application layer which will be called each
+        // time new data is received.
+        new_data_callback_t             new_data_callback;
+
+        //
+        // Transmission queue
+        //
+        // The queue contains entries which are waiting to be sent and entries
+        // which have been sent but not acknowledged.
+        //
+        // The queue is composed of functions instead of buffer. These functions
+        // are able to write a determined amount of bytes in network buffers
+        // just before the transmission.
+        //
+
+        // A queue entry contains a function able to write data from 'seq' to
+        // 'seq' + 'size'. The 'acked' function is called once the whole entry
+        // has been transmitted and acknowledged.
+        struct tx_queue_entry_t {
+            seq_t                               seq;
+            size_t                              size;
+
+            // Function provided by the user to write data into transmission
+            // buffers. The first function argument gives the offset (against
+            // 'seq'). The number of bytes to write is given by the cursor size.
+            //
+            // The function could be called an undefined number of times because
+            // of packet segmentation and retransmission.
+            function<void(size_t, cursor_t)>    writer;
+
+            // Function which is called once all the data provided by the writer
+            // has been acked and the queue entry removed.
+            function<void()>                    acked;
+        };
+
+        // Transmission queue.
+        //
+        // Entries are sorted in increasing sequence number order and will be
+        // removed once they have been fully acknowledged.
+        queue<tx_queue_entry_t> tx_queue;
+
+        inline bool in_state(state_t states)
+        {
+            return this->state & states;
+        }
+    };
+
     //
     // Static fields
     //
@@ -410,6 +512,11 @@ struct tcp_t {
 
     // Maximum number of out of order segments which will be retained before
     // starting to drop them.
+    //
+    // NOTE: current implementation is not efficient (quadradic against the
+    // number of out of order segments), but shouldn't be an issue as storing a
+    // large a number of out of order segments is not appealing (Linux use 3 as
+    // default value).
     static constexpr size_t     MAX_OUT_OF_ORDER_SEGS   = 5;
 
     //
@@ -557,38 +664,15 @@ struct tcp_t {
             } else {
                 tcb_t *tcb = &tcb_it->second;
 
-                switch (tcb->state) {
-                case tcb_t::SYN_SENT:
+                if (tcb->in_state(tcb_t::SYN_SENT)) {
                     this->_handle_syn_sent_state(
                         saddr, hdr, payload, tcb_id, tcb
                     );
-                    break;
-                case tcb_t::SYN_RECEIVED:
-                    this->_handle_syn_received_state(
+                } else {
+                    this->_handle_other_states(
                         saddr, hdr, payload, tcb_id, tcb
                     );
-                    break;
-                case tcb_t::ESTABLISHED:
-                    this->_handle_established_state(
-                        saddr, hdr, payload, tcb_id, tcb
-                    );
-                    break;
-                case tcb_t::FIN_WAIT_1:
-                    this->_handle_fin_wait_1_state(hdr);
-                    break;
-                case tcb_t::FIN_WAIT_2:
-                    this->_handle_fin_wait_2_state(hdr);
-                    break;
-                case tcb_t::CLOSE_WAIT:
-                    this->_handle_close_wait_state(hdr);
-                    break;
-                case tcb_t::CLOSING:
-                    this->_handle_closing_state(hdr);
-                    break;
-                case tcb_t::LAST_ACK:
-                    this->_handle_last_ack_state(hdr);
-                    break;
-                };
+                }
             }
         });
     }
@@ -682,12 +766,12 @@ private:
 
             tcb->rx_window.init = irs;
             tcb->rx_window.size = tcb->mss;
-            tcb->rx_window.next = irs + 1;
+            tcb->rx_window.next = irs + seq_t(1);
 
             tcb->tx_window.init  = iss;
             tcb->tx_window.size  = hdr->window.host();
             tcb->tx_window.unack = iss;
-            tcb->tx_window.next  = iss + 1;
+            tcb->tx_window.next  = iss + seq_t(1);
 
             //
             // Sends the SYN-ACK segment.
@@ -723,14 +807,18 @@ private:
             tcb = &tcb_it->second;
             tcb->new_data_callback = new_data_callback;
 
-            // TODO: handle potential payload
-
-            return;
+            // RFC 793 (page 66) specifies that any text included in the SYN
+            // segment should be queued for processing later. "Later" is not
+            // precisely defined, but I expect it to be "when in the ESTABLISHED
+            // state".
+            if (!payload.empty())
+                this->_handle_out_of_order_payload(irs + 1, payload, tcb);
         } else {
             // Any other segment is not valid and should be ignored.
             IGNORE_SEGMENT("invalid segment");
         }
     }
+
     //
     // SYN-SENT
     //
@@ -743,7 +831,7 @@ private:
         if (LIKELY(hdr->flags.ack)) {
             // If a segment contains an ACK field, we must check that it
             // acknowledges something we sent, whatever it's the SYN control
-            // flag or any data we sent.
+            // flag or any data we sent after.
             //
             // If the ACK number is out of the transmission window, the segment
             // comes from another connection and we respond with a RST segment
@@ -751,17 +839,14 @@ private:
 
             seq_t ack = hdr->ack.host();
 
-            if (UNLIKELY(
-                   !tcb->tx_window.acceptable_ack(ack)
-                || ack == tcb->tx_window.init
-            )) {
+            if (UNLIKELY(!tcb->tx_window.acceptable_ack(ack))) {
                 // The segment doesn't not acknowledge something we sent,
                 // probably a segment from an older connection.
 
+                IGNORE_SEGMENT("unexpected ack number");
+
                 if (!hdr->flags.rst)
                     return this->_respond_with_rst_segment(saddr, hdr, payload);
-                else
-                    IGNORE_SEGMENT("unexpected ack number");
             } else if (UNLIKELY(hdr->flags.rst))
                 return this->_destroy_tcb(tcb_id);
             else if (LIKELY(hdr->flags.syn)) {
@@ -774,18 +859,19 @@ private:
                                              // number.
 
                 tcb->rx_window.init = irs;
-                tcb->rx_window.next = irs + 1;
+                tcb->rx_window.next = irs + seq_t(1);
 
                 tcb->tx_window.size  = hdr->window.host();
                 tcb->tx_window.unack = ack;
 
-                this->_send_ack_segment(
-                    hdr->dport, saddr, hdr->sport,
-                    tcb->tx_window.next, tcb->rx_window.next
-                );
+                size_t payload_size = payload.size();
+                if (payload_size > 0) {
+                    this->_handle_in_order_payload(
+                        irs + 1, payload, payload_size, tcb
+                    );
+                }
 
-                // TODO: Must handle any data in the segment as if it was
-                // delivered while in the ESTABLISHED state.
+                return this->_respond_with_ack_segment(saddr, hdr, tcb);
             } else
                 IGNORE_SEGMENT("no SYN nor RST control bit");
         } else {
@@ -796,11 +882,11 @@ private:
                 // current connection as it doesn't have an ACK number, ignore
                 // it.
                 IGNORE_SEGMENT(
-                    "can not be associated with the current connection"
+                    "can't be associated with the current connection"
                 );
             } else if (LIKELY(hdr->flags.syn)) {
                 // Moves into the SYN-RECEIVED state and acknowledges the
-                // segment by re-.
+                // segment by re-emiting a SYN-ACK segment.
                 tcb->state = tcb_t::SYN_RECEIVED;
 
                 seq_t irs = hdr->seq.host(); // Initial Receiver Sequence
@@ -816,135 +902,14 @@ private:
                     tcb->tx_window.next, tcb->rx_window.next, tcb->mss
                 );
 
-                // TODO: if there is any data in the segment, its processing
-                // must be delayed until the state machine reaches the
-                // ESTABLISHED state.
+                if (!payload.empty()) {
+                    this->_handle_out_of_order_payload(
+                        irs + (seq_t) 1, payload, tcb
+                    );
+                }
             } else
                 IGNORE_SEGMENT("no SYN nor RST control bit");
         }
-    }
-
-    //
-    // SYN-RECEIVED
-    //
-
-    void _handle_syn_received_state(
-        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload,
-        tcb_id_t tcb_id, tcb_t *tcb
-    )
-    {
-        seq_t seq = hdr->seq.host();
-
-        // Checks that the segment contains data which is in the receiving
-        // window.
-        if (UNLIKELY(!tcb->rx_window.acceptable_seq(seq, payload.size()))) {
-            if (!hdr->flags.rst) {
-                // Old duplicate
-                return this->_respond_with_ack_segment(saddr, hdr, tcb);
-            } else
-                IGNORE_SEGMENT("unexpected ack number");
-        }
-
-        if (UNLIKELY(seq != tcb->rx_window.next)) {
-            // Segment received out of order.
-            //
-            // We could held it and reorder it later, but it's simpler to just
-            // ignore it and to send a second acknowledgment of the last byte
-            // we received.
-            IGNORE_SEGMENT("out of order segment");
-            return this->_respond_with_ack_segment(saddr, hdr, tcb);
-        }
-
-        if (UNLIKELY(hdr->flags.rst))
-            return this->_destroy_tcb(tcb_id);
-
-        if (UNLIKELY(hdr->flags.syn)) {
-            // SYN segment should reach this stage as any duplicate of the
-            // initial SYN segment should have been dropped earlier.
-
-            assert(seq != tcb->rx_window.init);
-
-            this->_destroy_tcb(tcb_id);
-            return this->_respond_with_rst_segment(saddr, hdr, payload);
-        }
-
-        if (UNLIKELY(!hdr->flags.ack)) {
-            // Any segment in this state should have the acknowledgment control
-            // bit on as required by RFC 793 (page 72).
-            IGNORE_SEGMENT("segment without the ACK control bit on");
-        }
-
-        seq_t ack = hdr->ack.host();
-
-        if (UNLIKELY(!tcb->tx_window.acceptable_ack(ack)))
-            return this->_respond_with_rst_segment(saddr, hdr, payload);
-
-        if (!hdr->flags.fin) {
-            // Moves into the ESTABLISHED state and acknowledges the
-            // received SYN segment.
-
-            tcb->state = tcb_t::ESTABLISHED;
-
-            tcb->tx_window.size  = hdr->window.host();
-            tcb->tx_window.unack = ack;
-
-            // TODO: any data received in this segment must be processed as it
-            // was sent while in the ESTABLISHED state.
-        } else {
-            // TODO: enters CLOSE-WAIT state.
-        }
-    }
-
-    //
-    // ESTABLISHED
-    //
-
-    void _handle_established_state(
-        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload,
-        tcb_id_t tcb_id, tcb_t *tcb
-    )
-    {
-
-    }
-
-    //
-    // FIN-WAIT-1
-    //
-
-    void _handle_fin_wait_1_state(const header_t *hdr)
-    {
-    }
-
-    //
-    // FIN-WAIT-2
-    //
-
-    void _handle_fin_wait_2_state(const header_t *hdr)
-    {
-    }
-
-    //
-    // CLOSE-WAIT
-    //
-
-    void _handle_close_wait_state(const header_t *hdr)
-    {
-    }
-
-    //
-    // CLOSING
-    //
-
-    void _handle_closing_state(const header_t *hdr)
-    {
-    }
-
-    //
-    // LAST-ACK
-    //
-
-    void _handle_last_ack_state(const header_t *hdr)
-    {
     }
 
     //
@@ -962,6 +927,202 @@ private:
         }
     }
 
+    //
+    // SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN- WAIT-2, CLOSE-WAIT,
+    // CLOSING, LAST-ACK
+    //
+
+    void _handle_other_states(
+        net_t<addr_t> saddr, const header_t *hdr, cursor_t payload,
+        tcb_id_t tcb_id, tcb_t *tcb
+    )
+    {
+        // Implemented as specified in RFC 793 page 69 to 76.
+
+        seq_t seq = hdr->seq.host();
+
+        // Checks that the segment contains data which is in the receiving
+        // window.
+        if (UNLIKELY(!tcb->rx_window.acceptable_seg(seq, payload.size()))) {
+            // Old duplicate.
+            if (!hdr->flags.rst)
+                this->_respond_with_ack_segment(saddr, hdr, tcb);
+
+            IGNORE_SEGMENT("unexpected ack number");
+        }
+
+        if (UNLIKELY(hdr->flags.rst)) {
+            // TODO: in SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2 &
+            // CLOSE-WAIT states, an error should be delivered to the
+            // application layer.
+            return this->_destroy_tcb(tcb_id);
+        }
+
+        if (UNLIKELY(hdr->flags.syn)) {
+            // Only invalid SYN segment should reach this stage, as any
+            // duplicate of the initial SYN segment should have been dropped
+            // earlier.
+
+            assert(seq != tcb->rx_window.init);
+
+            this->_destroy_tcb(tcb_id);
+
+            // TODO: A "connection reset" signal should be delivered to the
+            // application layer.
+
+            return this->_respond_with_rst_segment(saddr, hdr, payload);
+        }
+
+        if (UNLIKELY(!hdr->flags.ack)) {
+            // Any segment in this state should have the ACK control bit set as
+            // required by RFC 793 (page 72).
+            IGNORE_SEGMENT("segment without the ACK control bit set");
+        }
+
+        //
+        // Processes the acknowledgment number.
+        //
+
+        seq_t ack = hdr->ack.host();
+        bool acceptable_ack = tcb->tx_window.acceptable_ack(ack);
+
+        if (tcb->in_state(tcb_t::SYN_RECEIVED)) {
+            if (LIKELY(acceptable_ack)) {
+                // Our SYN has been acknowledged, moves into the ESTABLISHED
+                // state.
+                tcb->state          = tcb_t::ESTABLISHED;
+                tcb->tx_window.size = hdr->window.host();
+                tcb->tx_window.wl1  = seq;
+                tcb->tx_window.wl2  = ack;
+            } else
+                return this->_respond_with_rst_segment(saddr, hdr, payload);
+        }
+
+        // Could not be in the SYN-RECEIVED state anymore.
+        assert(!tcb->in_state(tcb_t::SYN_RECEIVED));
+
+        // Updates the transmission window according to the received ack number.
+        if (tcb->in_state(
+            tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2 |
+            tcb_t::CLOSE_WAIT | tcb_t::CLOSING
+        )) {
+            if (LIKELY(acceptable_ack)) {
+                tcb->tx_window.unack = ack;
+
+                // Removes transmission queue entries which have been
+                // acknowledged.
+                while (!tcb->tx_queue.empty()) {
+                    const typename tcb_t::tx_queue_entry_t *entry =
+                        &tcb->tx_queue.front();
+
+                    if (entry->seq + (seq_t) entry->size <= ack)
+                        tcb->tx_queue.pop();
+                    else
+                        break;
+                }
+
+                tcb->tx_window.update_window_size(seq, ack, hdr->window.host());
+            } else if (ack > tcb->tx_window.next) {
+                // Acknowledgement of something not yet send.
+                return this->_respond_with_ack_segment(saddr, hdr, tcb);
+            } else if (ack == tcb->tx_window.unack) {
+                // Duplicate segment, but it could contain a new window size.
+                tcb->tx_window.update_window_size(seq, ack, hdr->window.host());
+            }
+
+            // When in the FIN-WAIT-1 state, if the FIN is acknowledged, enters
+            // the FIN-WAIT-2 state.
+            if (tcb->in_state(tcb_t::FIN_WAIT_1) && ack == tcb->tx_window.next)
+                tcb->state = tcb_t::FIN_WAIT_2;
+
+            // When in the FIN-WAIT-2 state, if the retransmission queue is
+            // empty, the application layer can be notified that the connection
+            // is closed.
+            if (tcb->in_state(tcb_t::FIN_WAIT_2) && tcb->tx_queue.empty()) {
+                // TODO
+            }
+
+            // When in the CLOSING state, if the FIN is acknowledged, enters
+            // the TIME-WAIT state, otherwise, ignore the segment.
+            if (tcb->in_state(tcb_t::CLOSING)) {
+                if (ack == tcb->tx_window.next)
+                    tcb->state = tcb_t::TIME_WAIT;
+                else
+                    IGNORE_SEGMENT("in CLOSING state");
+            }
+
+        } else if (
+            tcb->in_state(tcb_t::LAST_ACK) && ack == tcb->tx_window.next
+        ) {
+            // When in the LAST-ACK state, if our FIN is now acknowledged,
+            // delete the TCB and return.
+            return this->_destroy_tcb(tcb_id);
+        }
+
+        // When in the CLOSING state, if our FIN is now acknowledged, delete
+        // the TCB and return.
+        if (tcb->in_state(tcb_t::LAST_ACK) && ack == tcb->tx_window.next)
+            return this->_destroy_tcb(tcb_id);
+
+        // TODO: processes URG segments.
+
+        //
+        // Processes the segment text.
+        //
+
+        if (tcb->in_state(
+            tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2
+        ))
+            this->_handle_payload(seq, payload, tcb);
+
+        // TODO: send an acknowledgement
+
+        //
+        // Processes the FIN control bit.
+        //
+
+        if (hdr->flags.fin) {
+            // TODO: notify the application layer that the connection is closing
+            // and returns an error value for any new call to receive().
+
+            ++tcb->rx_window.next;
+
+            // Acknowledges the FIN.
+            this->_respond_with_ack_segment(saddr, hdr, tcb);
+
+            switch (tcb->state) {
+            case tcb_t::ESTABLISHED:
+                tcb->state = tcb_t::CLOSE_WAIT;
+                break;
+            case tcb_t::FIN_WAIT_1:
+                // We would already be in the FIN-WAIT-2 if our FIN was acked,
+                // because of the previous ACK processing.
+                //
+                // The only way to reach this stage while being in the
+                // FIN-WAIT-1 is by *not* having received an acknowledgment for
+                // our FIN segment.
+
+                assert(ack != tcb->tx_window.next);
+
+                tcb->state = tcb_t::CLOSING;
+                break;
+            case tcb_t::FIN_WAIT_2:
+                tcb->state = tcb_t::TIME_WAIT;
+
+                // TODO: Start the time-wait timer, turn off the other timers.
+                break;
+            case tcb_t::TIME_WAIT:
+                // When in the TIME-WAIT state, this could only be a
+                // retransmission of the FIN. Restart the 2 MSL timeout.
+
+                break;
+            default:
+                // Remain in the same state.
+                break;
+            };
+        }
+    }
+
     #undef IGNORE_SEGMENT
 
     // -------------------------------------------------------------------------
@@ -969,130 +1130,121 @@ private:
     // Handle payload in segments
     //
 
+    // Delivers the given payload to the application if delivered in order,
+    // stores it in the out of order database otherwise (if possible).
+    //
+    // The payload is expected to be non empty and to have acceptable bytes
+    // (see 'acceptable_seg()').
+    //
+    // Doesn't send an acknowledgment segment but updates the receiver window
+    // when the segment is received in order.
     void _handle_payload(seq_t seq, cursor_t payload, tcb_t *tcb)
     {
-        if (tcb->rx_window.contains_next(seq)) {
-            // In order segment.
-//             tcb->new_data_callback();
+        size_t payload_size = payload.size();
 
+        assert(payload_size > 0);
+        assert(tcb->rx_window.acceptable_seg(seq, payload_size));
 
-        } else {
-            // Out of order segment.
+        if (tcb->rx_window.contains_next(seq, payload_size))
+            this->_handle_in_order_payload(seq, payload, payload_size, tcb);
+        else
             this->_handle_out_of_order_payload(seq, payload, tcb);
+    }
+
+    // Delivers the given in order payload to the application.
+    //
+    // The payload is expected to be non empty.
+    //
+    // Doesn't send an acknowledgment segment but updates the receiver window.
+    void _handle_in_order_payload(
+        seq_t seq, cursor_t payload, size_t payload_size, tcb_t *tcb
+    )
+    {
+        assert(payload_size > 0);
+        assert(tcb->rx_window.contains_next(seq, payload_size));
+
+        this->_deliver_to_app_layer(seq, payload, payload_size, tcb);
+
+        this->_check_out_of_order_payloads(tcb);
+    }
+
+    // Stores the segment's payload in the out of order database (if possible).
+    //
+    // The payload is expected to be non empty.
+    void _handle_out_of_order_payload(seq_t seq, cursor_t payload, tcb_t *tcb)
+    {
+        assert(!payload.empty());
+
+        if (tcb->out_of_order.size() < MAX_OUT_OF_ORDER_SEGS) {
+            typename tcb_t::out_of_order_segment_t seg { seq, payload };
+            tcb->out_of_order.push_back(seg);
+        }
+
+        // TODO: free the segment if not inserted.
+    }
+
+    // Checks for and processes any out of order segment which can now be
+    // received.
+    //
+    // Updates the receiver sliding window for any delivered segment.
+    void _check_out_of_order_payloads(tcb_t *tcb)
+    {
+        auto it = tcb->out_of_order.begin();
+
+        while (it != tcb->out_of_order.end()) {
+            size_t payload_size = it->payload.size();
+
+            if (tcb->rx_window.contains_next(it->seq, payload_size)) {
+                // Segment is now in order.
+
+                this->_deliver_to_app_layer(
+                    it->seq, it->payload, payload_size, tcb
+                );
+
+                // Removes the segment from the 'out_of_order' vector.
+                swap(*it, tcb->out_of_order.back());
+                tcb->out_of_order.pop_back();
+
+                // TODO: free the segment.
+
+                // Retries for others segments.
+                return this->_check_out_of_order_payloads(tcb);
+            } else if (!tcb->rx_window.acceptable_seg(it->seq, payload_size)) {
+                // Segment is now out of the window.
+
+                // TODO: free the segment.
+
+                // Removes the segment from the 'out_of_order' vector and
+                // continues if there is other segments in the vector.
+                swap(*it, tcb->out_of_order.back());
+                tcb->out_of_order.pop_back();
+            } else
+                it++;
         }
     }
 
-    void _handle_out_of_order_payload(seq_t seq, cursor_t payload, tcb_t *tcb)
+    // Delivers the segment starting at the given segmentation number and
+    // containing the given payload to the application layer. Updates the
+    // receiving windows accordingly.
+    //
+    // The payload must contain at least the next byte to receive (see
+    // 'rx_window_t::contains_next()').
+    void _deliver_to_app_layer(
+        seq_t seq, cursor_t payload, size_t payload_size, tcb_t *tcb
+    )
     {
-        if (tcb->out_of_order.size() >= MAX_OUT_OF_ORDER_SEGS) {
-            // Too many out of order segments have been accumulated, drops the
-            // current segment.
-            return;
-        }
+        assert(payload_size > 0);
+        assert(!tcb->rx_window.contains_next(seq, payload_size));
 
-        // While inserting the new segment, we must check that no previously
-        // inserted segment does provide the same data, and if the new segment
-        // can replace some previously inserted segment.
+        // Removes bytes which have already been received or which are after the
+        // window.
+        seq_t payload_offset = tcb->rx_window.next - seq;
+        payload = payload.drop(payload_offset.value)
+                         .take(tcb->rx_window.size);
 
-        size_t size = payload.size();
-        seq_t end = seq + size;
+        tcb->new_data_callback(payload);
 
-        assert(size > 0);
-
-        auto it = tcb->out_of_order.lower_bound(seq);
-
-        // Checks if no segment starting at or before the new segment's sequence
-        // number entirely overlap the new segment.
-        //r
-        // If no previously inserted segment overlap, we insert the new segment.
-        if (it != tcb->out_of_order.end() && it->first == seq) {
-            // A segment starting at the same sequence number already exists.
-            //
-            // Only the largest of the two segments will be held.
-
-            seq_t  seq_match  = it->first;
-            size_t size_match = it->second.size();
-
-            if (size > size_match) {
-                // Replaces the previous segment by the current segment
-                // which fully overlaps the matching segment.
-
-                it->second = payload;
-
-                // TODO: free the previous segment.
-            } else {
-                // The current segment payload is already entirely contained
-                // by a single previously received segment, ignore it
-
-                // TODO: free the current segment.
-                return;
-            }
-
-            it++;
-        } else {
-            // No previously inserted segment starts at the same sequence
-            // number.
-            //
-            // This doesn't mean that a segment with a lower sequence number
-            // doesn't entirely overlap the new segment we are trying to insert.
-            //
-            // The following loop checks that no segment with a lower sequence
-            // number entirely overlaps the new segment we are trying to insert.
-
-            typename map<seq_t, cursor_t>::reverse_iterator rev_it(it);
-
-            while (rev_it != tcb->out_of_order.rend()) {
-                seq_t  seq_match  = rev_it->first;
-                size_t size_match = rev_it->second.size();
-                seq_t  end_match  = seq_match + size_match;
-
-                assert(seq_match < seq);
-
-                if (end_match <= end) {
-                    // No segment overlap. Stop.
-                    break;
-                } else if (end_match >= end) {
-                    // A previous segment entirely overlaps the segment we are
-                    // trying to insert, the segment we are trying to insert is
-                    // useless.
-
-                    // TODO: free the current segment.
-                    return;
-                }
-
-                rev_it++;
-            }
-
-            // No segment entirely overlaps, we can insert the segment.
-            it = tcb->out_of_order.insert(
-                it, pair<seq_t, cursor_t>(seq, payload)
-            );
-        }
-
-        // We either inserted our segment or replaced another segment which
-        // started at the same sequence number.
-        //
-        // We must now remove any following segment that is overlapped by the
-        // segment we placed.
-
-        while (it != tcb->out_of_order.end() && it->first < end) {
-            seq_t  seq_match  = it->first;
-            size_t size_match = it->second.size();
-            seq_t  end_match  = seq_match + size_match;
-
-            if (end_match <= end) {
-                // The segment we placed contains all the data if this matching
-                // segment, we erase it.
-
-                it = tcb->out_of_order.erase(it);
-                // TODO: free the erased segment.
-            } else {
-                // No more segment overlap. Stop.
-                break;
-            }
-
-            it++;
-        }
+        tcb->rx_window.next += seq_t(payload_size);
     }
 
     // -------------------------------------------------------------------------
@@ -1239,26 +1391,7 @@ private:
         cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
         net_t<uint16_t> window, partial_sum_t partial_sum
-    )
-    {
-        return cursor.template write_with<header_t>(
-        [sport, dport, seq, ack, flags, window, partial_sum](header_t *hdr) {
-            hdr->sport   = sport;
-            hdr->dport   = dport;
-            hdr->seq     = seq;
-            hdr->ack     = ack;
-            hdr->res     = 0;
-            hdr->doff    = HEADER_SIZE / sizeof (uint32_t);
-            hdr->flags   = flags;
-            hdr->window  = window;
-            hdr->check   = checksum_t::ZERO;
-            hdr->urg_ptr = 0;
-
-            hdr->check = checksum_t(
-                partial_sum.append(partial_sum_t(hdr, HEADER_SIZE))
-            );
-        });
-    }
+    );
 
     // -------------------------------------------------------------------------
     //
@@ -1277,79 +1410,7 @@ private:
     // point to the first byte after the options once the function returns.
     static options_t _parse_options(
         const header_t *hdr, cursor_t *payload, _parse_options_status_t *status
-    )
-    {
-        options_t options;
-        options.mss = options_t::NO_MSS_OPTION;
-
-        *status = OPTIONS_SUCCESS;
-
-        size_t options_size = (hdr->doff * 4) - HEADER_SIZE;
-
-        if (options_size <= 0)
-            return options;
-
-        *payload = payload->read_with(
-        [flags = hdr->flags, status, &options, options_size]
-        (const char *data_char) mutable {
-            const uint8_t *data = (const uint8_t *) data_char;
-            const uint8_t *end  = data + options_size;
-
-            while (data < end) {
-                uint8_t kind = data[0];
-
-                switch (kind) {
-                // End of options list
-                case TCPOPT_EOL:
-                    goto stop_parsing;
-
-                // No-operation option
-                case TCPOPT_NOP:
-                    data++;
-                    continue;
-
-                // Maximum segment size option
-                case TCPOPT_MAXSEG:
-                    if (UNLIKELY(
-                           data[1] != 4 || !flags.syn
-                        || options.mss != options_t::NO_MSS_OPTION
-                    )) {
-                        *status = INVALID_MSS;
-                        goto stop_parsing;
-                    } else if (UNLIKELY(data + 4 > end)) {
-                        *status = MALFORMED_OPTIONS;
-                        goto stop_parsing;
-                    } else {
-                        mss_t mss = to_host<mss_t>(((mss_t *) data)[1]);
-
-                        options.mss = (typename options_t::mss_option_t) mss;
-
-                        data += 4;
-                        continue;
-                    }
-
-                default:
-                    TCP_DEBUG("Unknwown option kind: %d. Ignore", kind);
-
-                    // TCP options with other than TCPOPT_EOL or TCPOPT_NOP
-                    // contain their length in their second byte.
-                    uint8_t length = data[1];
-                    if (UNLIKELY(data + length > end || length < 2)) {
-                        *status = MALFORMED_OPTIONS;
-                        goto stop_parsing;
-                    }
-
-                    data += length;
-                };
-            }
-
-            stop_parsing:
-            {
-            }
-        }, options_size);
-
-        return options;
-    }
+    );
 
     // Writes the TCP options starting at the given buffer cursor.
     //
@@ -1357,37 +1418,15 @@ private:
     // the options.
     static pair<cursor_t, partial_sum_t> _write_options(
         cursor_t cursor, options_t options
-    )
-    {
-        if (options.mss != options_t::NO_MSS_OPTION) {
-            partial_sum_t partial_sum;
+    );
 
-            cursor = cursor.write_with(
-            [options, &partial_sum](char *data_char) {
-                uint8_t *data = (uint8_t *) data_char;
-
-                data[0]             = TCPOPT_MAXSEG;
-                data[1]             = 4;
-                ((mss_t *) data)[1] = to_network<mss_t>(options.mss);
-
-                partial_sum = partial_sum_t(data_char, 4);
-            }, 4);
-
-            return { cursor, partial_sum };
-        } else
-            return { cursor, partial_sum_t::ZERO };
-    }
+    static inline seq_t _get_current_tcp_seq(void);
 
     // -------------------------------------------------------------------------
-
-    static inline seq_t _get_current_tcp_seq(void)
-    {
-        return network_t::data_link_t::phys_t::get_current_tcp_seq();
-    }
 };
 
 //
-// Initializes static fields
+// Initializes static fields and methods.
 //
 
 template <typename network_t>
@@ -1396,7 +1435,7 @@ tcp_t<network_t>::EMPTY_OPTIONS = {
     tcp_t<network_t>::options_t::NO_MSS_OPTION
 };
 
-// Initializes common flags
+// Initializes common flags.
 
 template <typename network_t>
 const typename tcp_t<network_t>::flags_t
@@ -1418,6 +1457,141 @@ template <typename network_t>
 const typename tcp_t<network_t>::flags_t
 tcp_t<network_t>::_RST_ACK_FLAGS(0, 1 /* ACK */, 0, 1 /* RST */, 0, 0);
 
+// Defines static methods.
+
+template <typename network_t>
+typename tcp_t<network_t>::cursor_t
+tcp_t<network_t>::_write_header(
+    cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
+    net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
+    net_t<uint16_t> window, partial_sum_t partial_sum
+)
+{
+    return cursor.template write_with<header_t>(
+    [sport, dport, seq, ack, flags, window, partial_sum](header_t *hdr) {
+        hdr->sport   = sport;
+        hdr->dport   = dport;
+        hdr->seq     = seq;
+        hdr->ack     = ack;
+        hdr->res     = 0;
+        hdr->doff    = HEADER_SIZE / sizeof (uint32_t);
+        hdr->flags   = flags;
+        hdr->window  = window;
+        hdr->check   = checksum_t::ZERO;
+        hdr->urg_ptr = 0;
+
+        hdr->check = checksum_t(
+            partial_sum.append(partial_sum_t(hdr, HEADER_SIZE))
+        );
+    });
+}
+
+template <typename network_t>
+typename tcp_t<network_t>::options_t
+tcp_t<network_t>::_parse_options(
+    const header_t *hdr, cursor_t *payload, _parse_options_status_t *status
+)
+{
+    options_t options;
+    options.mss = options_t::NO_MSS_OPTION;
+
+    *status = OPTIONS_SUCCESS;
+
+    size_t options_size = (hdr->doff * 4) - HEADER_SIZE;
+
+    if (options_size <= 0)
+        return options;
+
+    *payload = payload->read_with(
+    [flags = hdr->flags, status, &options, options_size]
+    (const char *data_char) mutable {
+        const uint8_t *data = (const uint8_t *) data_char;
+        const uint8_t *end  = data + options_size;
+
+        while (data < end) {
+            uint8_t kind = data[0];
+
+            switch (kind) {
+            // End of options list
+            case TCPOPT_EOL:
+                goto stop_parsing;
+
+            // No-operation option
+            case TCPOPT_NOP:
+                data++;
+                continue;
+
+            // Maximum segment size option
+            case TCPOPT_MAXSEG:
+                if (UNLIKELY(
+                        data[1] != 4 || !flags.syn
+                    || options.mss != options_t::NO_MSS_OPTION
+                )) {
+                    *status = INVALID_MSS;
+                    goto stop_parsing;
+                } else if (UNLIKELY(data + 4 > end)) {
+                    *status = MALFORMED_OPTIONS;
+                    goto stop_parsing;
+                } else {
+                    mss_t mss = to_host<mss_t>(((mss_t *) data)[1]);
+
+                    options.mss = (typename options_t::mss_option_t) mss;
+
+                    data += 4;
+                    continue;
+                }
+
+            default:
+                TCP_DEBUG("Unknwown option kind: %d. Ignore", kind);
+
+                // TCP options with other than TCPOPT_EOL or TCPOPT_NOP
+                // contain their length in their second byte.
+                uint8_t length = data[1];
+                if (UNLIKELY(data + length > end || length < 2)) {
+                    *status = MALFORMED_OPTIONS;
+                    goto stop_parsing;
+                }
+
+                data += length;
+            };
+        }
+
+        stop_parsing:
+        {
+        }
+    }, options_size);
+
+    return options;
+}
+template <typename network_t>
+pair<typename tcp_t<network_t>::cursor_t, partial_sum_t>
+tcp_t<network_t>::_write_options(cursor_t cursor, options_t options)
+{
+    if (options.mss != options_t::NO_MSS_OPTION) {
+        partial_sum_t partial_sum;
+
+        cursor = cursor.write_with(
+        [options, &partial_sum](char *data_char) {
+            uint8_t *data = (uint8_t *) data_char;
+
+            data[0]             = TCPOPT_MAXSEG;
+            data[1]             = 4;
+            ((mss_t *) data)[1] = to_network<mss_t>(options.mss);
+
+            partial_sum = partial_sum_t(data_char, 4);
+        }, 4);
+
+        return { cursor, partial_sum };
+    } else
+        return { cursor, partial_sum_t::ZERO };
+}
+
+template <typename network_t>
+inline typename tcp_t<network_t>::seq_t
+tcp_t<network_t>::_get_current_tcp_seq(void)
+{
+    return network_t::data_link_t::phys_t::get_current_tcp_seq();
+}
 
 #undef TCP_COLOR
 #undef TCP_DEBUG
