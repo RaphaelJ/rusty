@@ -104,11 +104,16 @@ struct cursor_t {
 
     // Returns a new cursor which references the 'n' first bytes of the cursor.
     //
+    // If 'n' is larger than the size of the cursor (given 'size()'), the
+    // original cursor is returned.
+    //
     // Complexity: O(1).
     inline cursor_t take(size_t n) const
     {
         if (n <= current_size)
-            return cursor_t(current, n, nullptr, 0 );
+            return cursor_t(current, n, nullptr, 0);
+        else if (n >= size())
+            return *this;
         else
             return cursor_t(current, current_size, next, next_size - n);
     }
@@ -181,10 +186,10 @@ struct cursor_t {
         assert(can(n));
         cursor_t cursor = *this;
 
-        while (n >= cursor.current_size) {
+        while (n > 0 && n >= cursor.current_size) {
             memcpy(data, cursor.current, cursor.current_size);
-            cursor = cursor._next_buffer();
             n -= cursor.current_size;
+            cursor = cursor._next_buffer();
         }
 
         if (n > 0) {

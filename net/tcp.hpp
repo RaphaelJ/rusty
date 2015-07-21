@@ -162,22 +162,22 @@ struct tcp_t {
 
         friend inline bool operator<(seq_t a, seq_t b)
         {
-            return ((uint32_t) (a - b).value) < 0;
+            return ((int32_t) (a - b).value) < 0;
         }
 
         friend inline bool operator<=(seq_t a, seq_t b)
         {
-            return ((uint32_t) (a - b).value) <= 0;
+            return ((int32_t) (a - b).value) <= 0;
         }
 
         friend inline bool operator>(seq_t a, seq_t b)
         {
-            return ((uint32_t) (a - b).value) < 0;
+            return ((int32_t) (a - b).value) < 0;
         }
 
         friend inline bool operator>=(seq_t a, seq_t b)
         {
-            return ((uint32_t) (a - b).value) <= 0;
+            return ((int32_t) (a - b).value) <= 0;
         }
     } __attribute__ ((__packed__));
 
@@ -964,7 +964,12 @@ private:
             if (!hdr->flags.rst)
                 this->_respond_with_ack_segment(saddr, hdr, tcb);
 
-            IGNORE_SEGMENT("unexpected ack number");
+            TCP_DEBUG(
+                "Seq: %d Size: %zu Next: %d WinSize: %d", seq.value,
+                payload.size(), tcb->rx_window.next.value, 
+                tcb->rx_window.size
+            );
+            IGNORE_SEGMENT("unexpected sequence number");
         }
 
         if (UNLIKELY(hdr->flags.rst)) {
@@ -1013,8 +1018,15 @@ private:
                 tcb->tx_window.size = hdr->window.host();
                 tcb->tx_window.wl1  = seq;
                 tcb->tx_window.wl2  = ack;
-            } else
+            } else {
+                TCP_DEBUG(
+                    "ACK: %d INIT: %d SIZE: %d UNACK: %d Next: %d %d %d",
+                    ack, tcb->tx_window.init.value, tcb->tx_window.size,
+                    tcb->tx_window.unack.value, tcb->tx_window.next.value,
+                    tcb->tx_window.unack < ack, ack <= tcb->tx_window.next
+                );
                 return this->_respond_with_rst_segment(saddr, hdr, payload);
+            }
         }
 
         // Could not be in the SYN-RECEIVED state anymore.
@@ -1095,8 +1107,9 @@ private:
         //
 
         if (tcb->in_state(
-            tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2
-        ))
+                tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2
+            ) && payload.size() > 0
+        )
             this->_handle_payload(seq, payload, tcb);
 
         // TODO: send an acknowledgement
@@ -1251,9 +1264,9 @@ private:
         }
     }
 
-    // Delivers the segment starting at the given segmentation number and
-    // containing the given payload to the application layer. Updates the
-    // receiving windows accordingly.
+    // Delivers the segment starting at the given segment number and containing
+    // the given payload to the application layer. Updates the receiving window
+    // accordingly.
     //
     // The payload must contain at least the next byte to receive (see
     // 'rx_window_t::contains_next()').
@@ -1262,7 +1275,7 @@ private:
     )
     {
         assert(payload_size > 0);
-        assert(!tcb->rx_window.contains_next(seq, payload_size));
+        assert(tcb->rx_window.contains_next(seq, payload_size));
 
         // Removes bytes which have already been received or which are after the
         // window.

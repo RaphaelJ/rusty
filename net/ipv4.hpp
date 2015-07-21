@@ -245,11 +245,19 @@ struct ipv4_t {
             size_t header_size = hdr->ihl * sizeof (uint32_t),
                    total_size  = hdr->tot_len.host();
 
-            if (UNLIKELY(total_size < header_size))
-                IGNORE_DATAGRAM("total size is less than header size");
+            if (UNLIKELY(total_size < header_size)) {
+                IGNORE_DATAGRAM(
+                    "total size (%zu) is less than header size (%zu)",
+                    total_size, header_size
+                );
+            }
 
-            if (UNLIKELY(cursor_size != total_size))
-                IGNORE_DATAGRAM("total size is different from datagram size");
+            if (UNLIKELY(cursor_size < total_size)) {
+                IGNORE_DATAGRAM(
+                    "datagram size (%zu) is less than total size (%zu)",
+                    total_size, cursor_size
+                );
+            }
 
             uint16_t frag_off_host = hdr->frag_off.host();
             if (UNLIKELY(
@@ -267,6 +275,9 @@ struct ipv4_t {
             //
             // Processes the datagram.
             //
+
+            // The Ethernet frame could contain a small padding at its end.
+            payload = payload.take(total_size - header_size);
 
             if (hdr->protocol == IPPROTO_TCP) {
                 IPV4_DEBUG(
