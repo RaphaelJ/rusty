@@ -435,14 +435,16 @@ void mpipe_t::run(void)
 
         // Initializes a buffer cursor which starts at the Ethernet header and
         // stops at the end of the packet.
-        cursor_t cursor(&idesc);
+        //
+        // The buffer will be freed when the cursor will be destructed.
+        cursor_t cursor(&this->context, &idesc, true);
         cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
 
         DRIVER_DEBUG("Receives a %zu bytes packet", cursor.size());
 
         this->data_link.receive_frame(cursor);
 
-        gxio_mpipe_iqueue_drop(&this->iqueue, &idesc);
+        // gxio_mpipe_iqueue_drop(&this->iqueue, &idesc);
     }
 }
 
@@ -459,7 +461,10 @@ void mpipe_t::send_packet(
 
     gxio_mpipe_bdesc_t bdesc = _alloc_buffer(packet_size);
 
-    cursor_t cursor(&bdesc, packet_size);
+    // Allocates an unmanaged cursor, which will not desallocate the buffer when
+    // destr
+    cursor_t cursor(&this->context, &bdesc, packet_size, false);
+
     packet_writer(cursor);
 
     // Creates the egress descriptor.

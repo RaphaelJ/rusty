@@ -21,9 +21,11 @@
 #ifndef __TCP_MPIPE_DRIVERS_BUFFER_HPP__
 #define __TCP_MPIPE_DRIVERS_BUFFER_HPP__
 
+#include <algorithm>        // min()
 #include <cassert>
 #include <cstring>
 #include <functional>
+#include <memory>           // shared_ptr
 
 #include <gxio/mpipe.h>     // gxio_mpipe_*
 
@@ -35,6 +37,9 @@ namespace tcp_mpipe {
 namespace driver {
 namespace buffer {
 
+// Used internally to manage an mPIPE buffer life cycle.
+struct _buffer_desc_t;
+
 // Structure which can be used as an iterator to read and write into an mPIPE
 // (possibly chained) buffer.
 //
@@ -45,26 +50,42 @@ namespace buffer {
 // reusing an old cursor.
 struct cursor_t {
 
-    // A cursor state is represented by the next byte to read/write in the
-    // current buffer, the remaining bytes in this buffer and a reference to the
-    // next buffer descriptor.
+    // A cursor state is represented by the current buffer descriptor, the next
+    // byte to read/write in the current buffer, the remaining bytes in this
+    // buffer and a reference to the cursor containing the next buffer descriptor.
     //
     // 'current_size' can only be equal to zero if there is no buffer after.
     // That is, if the end of the current buffer is reached ('current_size'
-    // become zero), the cursor must load the next buffer descriptor. This makes
-    // 'read_in_place()' and 'write_in_place()' implementations easier.
+    // become zero), the cursor must load the next buffer descriptor ('current'
+    // must point to the next buffer's first byte). This makes 'read_in_place()'
+    // and 'write_in_place()' implementations easier.
 
     // State of the cursor at the end of the buffer chain.
-    static const cursor_t EMPTY;
+    static const cursor_t           EMPTY;
 
-    char                *current;       // Next byte to read/write.
-    size_t              current_size;
+    shared_ptr<_buffer_desc_t>      desc;
 
-    gxio_mpipe_bdesc_t  *next;
-    size_t              next_size;      // Remaining data in following buffers.
+    char                            *current;       // Next byte to read/write.
+    size_t                          current_size;
 
-    // Complexity: O(1).
-    inline cursor_t(gxio_mpipe_idesc_t *idesc)
+    #ifdef MPIPE_CHAINED_BUFFERS
+
+        shared_ptr<cursor_t>            next;           // Following buffers.
+        size_t                          next_size;      // Total size of
+                                                        // following buffers.
+
+    #endif /* MPIPE_CHAINED_BUFFERS */
+
+    // Creates a buffer's cursor from an ingress packet descriptor.
+    //
+    // If 'managed' is true, buffer descriptors will be freed automatically by
+    // calling 'gxio_mpipe_push_buffer_bdesc()'.
+    //
+    // Complexity: O(n) where 'n' is the number of buffer descriptors in the
+    // chain. 
+    inline cursor_t(
+        gxio_mpipe_context_t *context, gxio_mpipe_idesc_t *idesc, bool managed
+    )
     {
         // gxio_mpipe_idesc_to_bdesc() seems to be broken on MDE v4.3.2.
         // gxio_mpipe_bdesc_t edesc      = gxio_mpipe_idesc_to_bdesc(idesc);
@@ -73,13 +94,22 @@ struct cursor_t {
 
         size_t total_size = gxio_mpipe_idesc_get_xfer_size(idesc);
 
-        _init_with_bdesc(&edesc, total_size);
+        _init_with_bdesc(context, &edesc, total_size, managed);
     }
 
-    // Complexity: O(1).
-    inline cursor_t(gxio_mpipe_bdesc_t *bdesc, size_t total_size)
+    // Creates a buffer's cursor from a (possibly chained) buffer descriptor.
+    //
+    // If 'managed' is true, buffer descriptors will be freed automatically by
+    // calling 'gxio_mpipe_push_buffer_bdesc()'.
+    //
+    // Complexity: O(n) where 'n' is the number of buffer descriptors in the
+    // chain.
+    inline cursor_t(
+        gxio_mpipe_context_t *context, gxio_mpipe_bdesc_t *bdesc,
+        size_t total_size, bool managed
+    )
     {
-        _init_with_bdesc(bdesc, total_size);
+        _init_with_bdesc(context, bdesc, total_size, managed);
     }
 
     // Returns the total number of remaining bytes.
@@ -87,7 +117,11 @@ struct cursor_t {
     // Complexity: O(1).
     inline size_t size(void) const
     {
-        return current_size + next_size;
+        #ifdef MPIPE_CHAINED_BUFFERS
+            return current_size + next_size;
+        #else
+            return current_size;
+        #endif/* MPIPE_CHAINED_BUFFERS */
     }
 
     // True if there is nothing more to read.
@@ -95,11 +129,15 @@ struct cursor_t {
     // Complexity: O(1).
     inline bool empty(void) const
     {
-        if (current_size == 0) {
-            assert(next_size == 0);
-            return true;
-        } else
-            return false;
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (current_size == 0) {
+                assert(next_size == 0);
+                return true;
+            } else
+                return false;
+        #else
+            return current_size == 0;
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Returns a new cursor which references the 'n' first bytes of the cursor.
@@ -110,32 +148,43 @@ struct cursor_t {
     // Complexity: O(1).
     inline cursor_t take(size_t n) const
     {
-        if (n <= current_size)
-            return cursor_t(current, n, nullptr, 0);
-        else if (n >= size())
-            return *this;
-        else
-            return cursor_t(current, current_size, next, next_size - n);
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (n <= current_size)
+                return cursor_t(desc, current, n, nullptr, 0);
+            else if (n >= size())
+                return *this;
+            else {
+                return cursor_t(
+                    desc, current, current_size, next, next_size - n
+                );
+            }
+        #else
+            return cursor_t(desc, current, min(current_size, n));
+        #endif/* MPIPE_CHAINED_BUFFERS */
     }
 
     // Returns a new cursor which references 'n' bytes after the cursor.
     //
     // Returns an empty cursor if the 'n' is larger than 'size()'.
     //
-    // Complexity: O(n).
+    // Complexity: O(n) with chained buffer, O(1) with unchained buffers.
     inline cursor_t drop(size_t n) const
     {
-        if (n >= size())
-            return EMPTY;
-        else {
-            cursor_t cursor = *this;
-            while (n > 0 && n >= cursor.current_size) {
-                n -= cursor.current_size;
-                cursor = cursor._next_buffer();
-            }
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (n >= size())
+                return EMPTY;
+            else {
+                cursor_t cursor = *this;
+                while (n > 0 && n >= cursor.current_size) {
+                    n -= cursor.current_size;
+                    cursor = *(cursor.next);
+                }
 
-            return cursor._drop_in_buffer(n);
-        }
+                return cursor._drop_in_buffer(n);
+            }
+        #else
+            return _drop_in_buffer(n);
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Equivalent to 'drop(sizeof (T))'.
@@ -184,20 +233,26 @@ struct cursor_t {
     inline cursor_t read(char *data, size_t n) const
     {
         assert(can(n));
-        cursor_t cursor = *this;
 
-        while (n > cursor.current_size) {
-            memcpy(data, cursor.current, cursor.current_size);
-            n -= cursor.current_size;
-            cursor = cursor._next_buffer();
-        }
+        #ifdef MPIPE_CHAINED_BUFFERS
+            cursor_t cursor = *this;
 
-        if (n > 0) {
-            memcpy(data, cursor.current, n);
-            cursor = cursor._drop_in_buffer(n);
-        }
+            while (n > cursor.current_size) {
+                memcpy(data, cursor.current, cursor.current_size);
+                n -= cursor.current_size;
+                cursor = *(cursor.next);
+            }
 
-        return cursor;
+            if (n > 0) {
+                memcpy(data, cursor.current, n);
+                cursor = cursor._drop_in_buffer(n);
+            }
+
+            return cursor;
+        #else
+            memcpy(data, current, n);
+            return _drop_in_buffer(n);
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Equivalent to 'read(data, sizeof (T))'.
@@ -207,23 +262,36 @@ struct cursor_t {
         return read((char *) data, sizeof (T));
     }
 
+    // Writes 'n' bytes of data. There must be enough bytes in the buffer to
+    // write the item (see 'can()').
+    //
+    // Returns a new buffer which references the data following what has been
+    // written.
+    //
+    // Complexity: O(n) where 'n' is the number of bytes to write.
     inline cursor_t write(const char *data, size_t n) const
     {
         assert(can(n));
-        cursor_t cursor = *this;
 
-        while (n > cursor.current_size) {
-            memcpy(cursor.current, data, cursor.current_size);
-            cursor = cursor._next_buffer();
-            n -= cursor.current_size;
-        }
+        #ifdef MPIPE_CHAINED_BUFFERS
+            cursor_t cursor = *this;
 
-        if (n > 0) {
-            memcpy(cursor.current, data, n);
-            cursor = cursor._drop_in_buffer(n);
-        }
+            while (n > cursor.current_size) {
+                memcpy(cursor.current, data, cursor.current_size);
+                n -= cursor.current_size;
+                cursor = *(cursor.next);
+            }
 
-        return cursor;
+            if (n > 0) {
+                memcpy(cursor.current, data, n);
+                cursor = cursor._drop_in_buffer(n);
+            }
+
+            return cursor;
+        #else
+            memcpy(current, data, n);
+            return _drop_in_buffer(n);
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Equivalent to 'write(data, sizeof (T))'.
@@ -266,12 +334,16 @@ struct cursor_t {
     {
         assert(can_in_place(n));
 
-        *data = this->current;
+        *data = current;
 
-        if (n == current_size)
-            return _next_buffer();
-        else
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (n == current_size)
+                return *next;
+            else
+                return _drop_in_buffer(n);
+        #else
             return _drop_in_buffer(n);
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Gives a pointer to read or write the given number of bytes directly in
@@ -287,10 +359,14 @@ struct cursor_t {
 
         *data = current;
 
-        if (n == current_size)
-            return _next_buffer();
-        else
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (n == current_size)
+                return *next;
+            else
+                return _drop_in_buffer(n);
+        #else
             return _drop_in_buffer(n);
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Equivalent to 'in_place(data, sizeof (T))'.
@@ -422,48 +498,82 @@ struct cursor_t {
     // Complexity: O(n).
     inline void for_each(function<void(const char *, size_t)> f) const
     {
-        cursor_t cursor = *this;
+        #ifdef MPIPE_CHAINED_BUFFERS
+            cursor_t cursor = *this;
 
-        while (!cursor.empty()) {
-            f(cursor.current, cursor.current_size);
-            cursor = cursor._next_buffer();
-        }
+            while (!cursor.empty()) {
+                f(cursor.current, cursor.current_size);
+                cursor = *cursor._next;
+            }
+        #else
+            f(current, current_size);
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
 private:
-    cursor_t(
-        char *_current,   size_t _current_size,
-        gxio_mpipe_bdesc_t *_next, size_t _next_size
-    ) : current(_current), current_size(_current_size),
-        next(_next), next_size(_next_size)
+    #ifdef MPIPE_CHAINED_BUFFERS
+        cursor_t(
+            shared_ptr<_buffer_desc_t> _desc, char *_current,
+            size_t _current_size,
+            shared_ptr<cur> _next, size_t _next_size
+        ) : desc(_desc), current(_current), current_size(_current_size),
+            next(_next), next_size(_next_size)
+    #else
+        cursor_t(
+            shared_ptr<_buffer_desc_t> _desc, char *_current,
+            size_t _current_size
+        ) : desc(_desc), current(_current), current_size(_current_size)
+    #endif /* MPIPE_CHAINED_BUFFERS */
     {
     }
 
-    // Complexity: O(1).
-    void _init_with_bdesc(const gxio_mpipe_bdesc_t *bdesc, size_t total_size);
-
-    // Skips to the next buffer descriptor.
-    //
-    // Complexity: O(1).
-    inline cursor_t _next_buffer(void) const
-    {
-        return cursor_t(next, next_size);
-    }
+    // Complexity: O(n) where 'n' is the number of buffer descriptors in the
+    // chain.
+    void _init_with_bdesc(
+        gxio_mpipe_context_t *context, gxio_mpipe_bdesc_t *bdesc,
+        size_t total_size, bool managed
+    );
 
     // Returns a new cursor which references 'n' bytes after the cursor.
     //
-    // Does *not* handle the case when 'n' is excatlty equal to 'current_size'
+    // Does *not* handle the case when 'n' is exactly equal to 'current_size'
     // (i.e. when a new buffer must be loaded).
     //
     // Complexity: O(1).
     inline cursor_t _drop_in_buffer(size_t n) const
     {
-        assert(can_in_place(n) && (n < current_size || next == nullptr));
+        #ifdef MPIPE_CHAINED_BUFFERS
+            assert(can_in_place(n) && (n < current_size || next == nullptr));
 
-        return {
-            current + n, current_size - n,
-            next,        next_size
-        };
+            return {
+                desc, current + n, current_size - n,
+                next, next_size
+            };
+        #else
+            assert(can_in_place(n));
+
+            return { desc, current + n, current_size - n };
+        #endif
+    }
+};
+
+struct _buffer_desc_t {
+    gxio_mpipe_context_t    *context;
+    gxio_mpipe_bdesc_t      bdesc;
+    bool                    is_managed; // If true, the buffer will be released
+                                        // when this object will be destructed.
+
+    _buffer_desc_t(
+        gxio_mpipe_context_t *_context, gxio_mpipe_bdesc_t _bdesc,
+        bool _is_managed
+    ) : context(_context), bdesc(_bdesc), is_managed(_is_managed)
+    {
+    }
+
+    ~_buffer_desc_t(void)
+    {
+        if (is_managed)
+            gxio_mpipe_push_buffer_bdesc(context, bdesc);
     }
 };
 

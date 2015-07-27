@@ -19,6 +19,7 @@
 //
 
 #include <cstdint>
+#include <memory>               // shared_ptr, make_shared
 
 #include <gxio/mpipe.h>         // MPIPE_EDMA_DESC_*
 
@@ -30,10 +31,20 @@ namespace tcp_mpipe {
 namespace driver {
 namespace buffer {
 
-const cursor_t cursor_t::EMPTY = { nullptr, 0, nullptr, 0 };
+#ifdef MPIPE_CHAINED_BUFFERS
+    const cursor_t cursor_t::EMPTY = {
+        shared_ptr<_buffer_desc_t>(nullptr), nullptr, 0,
+        shared_ptr<cursor_t>(nullptr), 0
+    };
+#else
+    const cursor_t cursor_t::EMPTY = {
+        shared_ptr<_buffer_desc_t>(nullptr), nullptr, 0
+    };
+#endif /* MPIPE_CHAINED_BUFFERS */
 
 void cursor_t::_init_with_bdesc(
-    const gxio_mpipe_bdesc_t *bdesc, size_t total_size
+    gxio_mpipe_context_t *context, gxio_mpipe_bdesc_t *bdesc, size_t total_size,
+    bool is_managed
 )
 {
     // The end of the buffer chain could be reached because:
@@ -43,13 +54,16 @@ void cursor_t::_init_with_bdesc(
     // 3) the descriptor is invalid (last buffer in a chain).
 
     if (
-            bdesc == nullptr || total_size == 0
+           bdesc == nullptr || total_size == 0
         || bdesc->c == MPIPE_EDMA_DESC_WORD1__C_VAL_INVALID
     ) {
         assert(total_size == 0);
         *this = EMPTY;
         return;
     }
+
+    // Allocates a manageable buffer descriptor.
+    desc = make_shared<_buffer_desc_t>(context, *bdesc, is_managed);
 
     // The last 42 bits of the buffer descriptor contain the virtual address of
     // the buffer with the lower 7 bits being the offset of packet data inside
@@ -64,26 +78,34 @@ void cursor_t::_init_with_bdesc(
 
     current = va + offset;
 
-    size_t buffer_size = gxio_mpipe_buffer_size_enum_to_buffer_size(
-        (gxio_mpipe_buffer_size_enum_t) bdesc->size
-    );
+    #ifdef MPIPE_CHAINED_BUFFERS
+        size_t buffer_size = gxio_mpipe_buffer_size_enum_to_buffer_size(
+            (gxio_mpipe_buffer_size_enum_t) bdesc->size
+        );
 
-    switch (bdesc->c) {
-    case MPIPE_EDMA_DESC_WORD1__C_VAL_UNCHAINED:
-        assert(total_size <= buffer_size - offset);
+        switch (bdesc->c) {
+        case MPIPE_EDMA_DESC_WORD1__C_VAL_UNCHAINED:
+            assert(total_size <= buffer_size - offset);
+
+            current_size = total_size;
+            next         = nullptr;
+            next_size    = 0;
+            return;
+        case MPIPE_EDMA_DESC_WORD1__C_VAL_CHAINED:
+            current_size = min(total_size, buffer_size - offset);
+            next_size    = total_size - current_size;
+            next         = make_shared<cursor_t>(
+                context, (gxio_mpipe_bdesc_t *) va, next_size, is_managed
+            );
+            return;
+        default:
+            DRIVER_DIE("Invalid buffer descriptor");
+        };
+    #else
+        assert(bdesc->c == MPIPE_EDMA_DESC_WORD1__C_VAL_UNCHAINED);
 
         current_size = total_size;
-        next         = nullptr;
-        next_size    = 0;
-        return;
-    case MPIPE_EDMA_DESC_WORD1__C_VAL_CHAINED:
-        current_size = min(total_size, buffer_size - offset);
-        next         = (gxio_mpipe_bdesc_t *) va;
-        next_size    = total_size - current_size;
-        return;
-    default:
-        DRIVER_DIE("Invalid buffer descriptor");
-    };
+    #endif /* MPIPE_CHAINED_BUFFERS */
 }
 
 } } } /* namespace tcp_mpipe::driver::buffer */
