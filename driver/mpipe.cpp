@@ -279,7 +279,7 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
 
             // Adds a padding to have a 128 bytes aligned address for the packet
             // buffer memory.
-            stack_size += -(long)stack_size & (128 - 1);
+            stack_size += -(long) stack_size & (128 - 1);
 
             size_t buffer_size = gxio_mpipe_buffer_size_enum_to_buffer_size(
                 stack_info.size

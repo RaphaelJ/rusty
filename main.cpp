@@ -75,14 +75,39 @@ int main(int argc, char **argv)
     tile_allocator_t<int> allocator();
 
     mpipe.data_link.ipv4.tcp.listen(80,
-        [](mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
-            return [](mpipe_t::tcp_mpipe_t::cursor_t data) {
-                printf("Received: ");
-                while (!data.empty()) {
-                    char c;
-                    data = data.read(&c, 1);;
-                    printf("%c", c);
-                }
+        [tcp=&mpipe.data_link.ipv4.tcp](mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
+            return [tcp, tcb_id](mpipe_t::cursor_t data) {
+                size_t size = data.size();
+
+                char *buffer = new char[size + 1];
+                data.read_with(
+                    [buffer, size](const char *input_buffer)
+                    {
+                        return memcpy(buffer, input_buffer, size);
+                    }, size
+                );
+                buffer[size] = '\0';
+
+                MAIN_DEBUG("Received %zu bytes: %s", size, buffer);
+
+                tcp->send(
+                    tcb_id, size,
+                    [buffer](size_t offset, mpipe_t::cursor_t out_cursor)
+                    {
+//                         char buffer[40] = { 0 };
+//                         MAIN_DEBUG(buffer, "Received %zu bytes\n", size);
+//                         printf("%s", buffer);
+
+//                         out_cursor.write(buffer + offset, 40);
+                        MAIN_DEBUG("Offset %zu", offset);
+                        out_cursor.write(buffer + offset, out_cursor.size());
+                    },
+                    [buffer]()
+                    {
+                        MAIN_DEBUG("ACKED");
+                        delete buffer;
+                    }
+                );
             };
         }
     );

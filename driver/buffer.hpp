@@ -129,7 +129,7 @@ struct cursor_t {
             return EMPTY;
         else {
             cursor_t cursor = *this;
-            while (n >= cursor.current_size) {
+            while (n > 0 && n >= cursor.current_size) {
                 n -= cursor.current_size;
                 cursor = cursor._next_buffer();
             }
@@ -186,7 +186,7 @@ struct cursor_t {
         assert(can(n));
         cursor_t cursor = *this;
 
-        while (n > 0 && n >= cursor.current_size) {
+        while (n > cursor.current_size) {
             memcpy(data, cursor.current, cursor.current_size);
             n -= cursor.current_size;
             cursor = cursor._next_buffer();
@@ -212,7 +212,7 @@ struct cursor_t {
         assert(can(n));
         cursor_t cursor = *this;
 
-        while (n >= cursor.current_size) {
+        while (n > cursor.current_size) {
             memcpy(cursor.current, data, cursor.current_size);
             cursor = cursor._next_buffer();
             n -= cursor.current_size;
