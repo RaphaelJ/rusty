@@ -86,7 +86,10 @@ struct timer_manager_t {
     // Registers a timer with a delay in microseconds (10^-6) and a function.
     //
     // The timer will only be executed once.
-    timer_id_t schedule(delay_t delay, const function<void()>& f);
+    timer_id_t schedule(delay_t delay, function<void()> f);
+
+    // Reschedules the given timer with a new delay. Returns the new 'timer_id'.
+    timer_id_t reschedule(timer_id_t timer_id, delay_t new_delay);
 
     // Unschedules a timer by the identifier that has been returned by the
     // 'schedule()' call.
@@ -94,6 +97,10 @@ struct timer_manager_t {
     // Returns 'true' if the timer has been removed, 'false' if it was not
     // found.
     bool remove(timer_id_t timer_id);
+
+private:
+    // Sames as 'schedule' but doesn't produce a log message.
+    timer_id_t _insert(delay_t delay, function<void()> f);
 };
 
 } } } /* namespace tcp_mpipe::driver::timer */

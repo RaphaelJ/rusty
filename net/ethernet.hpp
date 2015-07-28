@@ -151,7 +151,7 @@ struct ethernet_t {
         phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
         net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
     ) : phys(_phys), max_payload_size(_max_payload_size()),
-        addr(_addr), arp(this, &ipv4), ipv4(this, &arp, ipv4_addr)
+        addr(_addr), arp(this, &ipv4), ipv4(this, &arp, ipv4_addr, _timers)
     {
     }
 
@@ -166,7 +166,7 @@ struct ethernet_t {
         max_payload_size = _max_payload_size();
         addr             = _addr;
         arp.init(this, _timers, &ipv4);
-        ipv4.init(this, &arp, ipv4_addr);
+        ipv4.init(this, &arp, ipv4_addr, _timers);
     }
 
     // Processes an Ethernet frame. The cursor must begin at the Ethernet layer

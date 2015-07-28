@@ -19,6 +19,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
+#include <cassert>
 #include <cinttypes>
 #include <cstdint>
 #include <map>
@@ -64,7 +65,47 @@ void timer_manager_t::tick(void)
 }
 
 timer_manager_t::timer_id_t timer_manager_t::schedule(
-    timer_manager_t::delay_t delay, const function<void()>& f
+    timer_manager_t::delay_t delay, function<void()> f
+)
+{
+    timer_id_t timer_id = this->_insert(delay, f);
+
+    DRIVER_DEBUG(
+        "Schedules timer %" PRIu64 " with a %" PRIu64 " µs delay", timer_id,
+        delay
+    );
+
+    return timer_id;
+}
+
+timer_manager_t::timer_id_t timer_manager_t::reschedule(
+    timer_manager_t::timer_id_t timer_id, timer_manager_t::delay_t new_delay
+)
+{
+    auto it = timers.find(timer_id);
+    assert(it != timers.end());
+
+    timer_id_t new_timer_id = _insert(new_delay, it->second);
+
+    timers.erase(timer_id);
+
+    DRIVER_DEBUG(
+        "Reschedules timer %" PRIu64 " as %" PRIu64 " with a %" PRIu64
+        " µs delay", timer_id, new_timer_id, new_delay
+    );
+
+    return new_timer_id;
+}
+
+bool timer_manager_t::remove(timer_manager_t::timer_id_t timer_id)
+{
+    DRIVER_DEBUG("Unschedules timer %" PRIu64, timer_id);
+
+    return timers.erase(timer_id);
+}
+
+timer_manager_t::timer_id_t timer_manager_t::_insert(
+    timer_manager_t::delay_t delay, function<void()> f
 )
 {
     cycles_t expire = get_cycle_count() + CYCLES_PER_SECOND * delay / 1000000;
@@ -79,18 +120,7 @@ timer_manager_t::timer_id_t timer_manager_t::schedule(
         }
     }
 
-    DRIVER_DEBUG(
-        "Schedules timer %" PRIu64 " with %" PRIu64 " µs delay", expire, delay
-    );
-
     return expire;
-}
-
-bool timer_manager_t::remove(timer_manager_t::timer_id_t timer_id)
-{
-    DRIVER_DEBUG("Unschedules timer %" PRIu64, timer_id);
-
-    return timers.erase(timer_id);
 }
 
 } } } /* namespace tcp_mpipe::driver::timer */

@@ -93,6 +93,11 @@ struct tcp_t {
     // member type.
     typedef network_var_t                           network_t;
 
+    typedef typename network_t::cursor_t            cursor_t;
+    typedef typename network_t::timer_manager_t     timer_manager_t;
+    typedef typename timer_manager_t::timer_id_t    timer_id_t;
+    typedef typename timer_manager_t::delay_t       delay_t;
+
     typedef tcp_t<network_t>                        this_t;
 
     typedef typename network_t::addr_t              addr_t;
@@ -282,8 +287,6 @@ struct tcp_t {
         }
     };
 
-    typedef typename network_t::cursor_t            cursor_t;
-
     // Uniquely identifies a TCP Control Block or a connection.
     typedef tcp_tcb_id_t<addr_t, port_t>            tcb_id_t;
 
@@ -371,6 +374,9 @@ struct tcp_t {
             seq_t       init;   // Initial Sequence Number (ISN) of the remote.
             win_size_t  size;
             seq_t       next;   // Next sequence number expected to receive.
+            seq_t       acked;  // Last acknowledgement number for which a
+                                // segment has been sent. Could be lesser than
+                                // 'next'.
 
             // Returns 'true' if the given sequence number is inside this
             // receiver window (next <= seq < next + size).
@@ -573,6 +579,11 @@ struct tcp_t {
         // 'tx_queue_sent_unack' queue.
         deque<tx_queue_entry_t> tx_queue_not_sent;
 
+        // Current timer identifier. Has 0 as value if no timer associated.
+        //
+        // If in the TIME-WAIT state, references the 2MSL timer.
+        timer_id_t              timer;
+
         inline bool in_state(state_t states) const
         {
             return this->state & states;
@@ -592,6 +603,10 @@ struct tcp_t {
     // '29200' is the default value on Linux with 10 Gbps links.
     static constexpr win_size_t INITIAL_WND_SIZE = 29200;
 
+    // Delay in which a connection stays in the TIME-WAIT state before being
+    // removed ("2MSL" timeout).
+    static constexpr delay_t    FIN_TIMEOUT = 60000000; // 60 sec.
+
     // Maximum number of out of order segments which will be retained before
     // starting to drop them.
     //
@@ -607,6 +622,8 @@ struct tcp_t {
 
     // Lower network layer instance.
     network_t                                               *network;
+
+    timer_manager_t         *timers;
 
     // Ports which are in the LISTEN state, passively waiting for client
     // connections.
@@ -637,15 +654,17 @@ struct tcp_t {
     //
     // Does the same thing as creating the environment with 'tcp_t()' and then
     // calling 'init()'.
-    tcp_t(network_t *_network)
-        : network(_network), mss(_network->max_payload_size - HEADER_SIZE)
+    tcp_t(network_t *_network, timer_manager_t *_timers)
+        : network(_network), timers(_timers),
+          mss(_network->max_payload_size - HEADER_SIZE)
     {
     }
 
     // Initializes a TCP environment for the given network layer instance.
-    void init(network_t *_network)
+    void init(network_t *_network, timer_manager_t *_timers)
     {
         network = _network;
+        timers  = _timers;
         mss     = _network->max_payload_size - HEADER_SIZE;
     }
 
@@ -765,6 +784,15 @@ struct tcp_t {
         });
     }
 
+    #define TCP_DEBUG_STATE_CHANGE(from, to)                                   \
+        do {                                                                   \
+            TCP_DEBUG(                                                         \
+                "State change for %s:%" PRIu16 " on local port %" PRIu16 ": "  \
+                from " -> " to, network_t::addr_t::to_alpha(tcb_id.raddr),     \
+                tcb_id.rport.host(), tcb_id.lport.host()                       \
+            );                                                                 \
+        } while (0);
+
     //
     // Server sockets.
     //
@@ -775,7 +803,14 @@ struct tcp_t {
     // callback function.
     void listen(port_t port, new_connection_callback_t new_connection_callback)
     {
+        assert(this->listens.find(port) == this->listens.end());
+
         this->listens.emplace(port, new_connection_callback);
+
+        TCP_DEBUG(
+            "State change for local port %" PRIu16 ": from CLOSED to LISTEN",
+            port
+        );
     }
 
     //
@@ -896,8 +931,10 @@ struct tcp_t {
             tcb_t::CLOSE_WAIT
         ));
 
-        if (tcb->in_state(tcb_t::SYN_SENT))
+        if (tcb->in_state(tcb_t::SYN_SENT)) {
+            TCP_DEBUG_STATE_CHANGE("SYN-SENT", "CLOSED");
             return this->_destroy_tcb(tcb_id);
+        }
 
         if (tcb->tx_queue_not_sent.empty()) {
             // Sends a FIN segment immediately.
@@ -936,15 +973,6 @@ private:
     //
     // Each handler is responsible of the processing of a received segment with
     // the connection in the corresponding state.
-
-    #define TCP_DEBUG_STATE_CHANGE(from, to)                                   \
-        do {                                                                   \
-            TCP_DEBUG(                                                         \
-                "State change for %s:%" PRIu16 " on local port %" PRIu16 ": "  \
-                from " -> " to, network_t::addr_t::to_alpha(saddr),            \
-                hdr->sport.host(), hdr->dport.host()                           \
-            );                                                                 \
-        } while (0);
 
     //
     // LISTEN
@@ -997,6 +1025,8 @@ private:
             tcb->tx_window.unack = iss;
             tcb->tx_window.next  = iss + seq_t(1);
             tcb->tx_window.init_from_syn(this, hdr, irs, options);
+
+            tcb->timer = 0;
 
             //
             // Sends the SYN-ACK segment.
@@ -1064,9 +1094,10 @@ private:
 
                 if (!hdr->flags.rst)
                     return this->_respond_with_rst_segment(saddr, hdr, payload);
-            } else if (UNLIKELY(hdr->flags.rst))
-                return this->_destroy_tcb(tcb_id);
-            else if (LIKELY(hdr->flags.syn)) {
+            } else if (UNLIKELY(hdr->flags.rst)) {
+                TCP_DEBUG_STATE_CHANGE("SYN-SENT", "CLOSED");
+                return this->_destroy_tcb(tcb_id, tcb);
+            } else if (LIKELY(hdr->flags.syn)) {
                 // Moves into the ESTABLISHED state and acknowledges the
                 // received SYN/ACK segment.
 
@@ -1147,7 +1178,7 @@ private:
     }
 
     //
-    // SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN- WAIT-2, CLOSE-WAIT,
+    // SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2, CLOSE-WAIT,
     // CLOSING, LAST-ACK
     //
 
@@ -1175,7 +1206,7 @@ private:
             // TODO: in SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2 &
             // CLOSE-WAIT states, an error should be delivered to the
             // application layer.
-            return this->_destroy_tcb(tcb_id);
+            return this->_destroy_tcb(tcb_id, tcb);
         }
 
         if (UNLIKELY(hdr->flags.syn)) {
@@ -1183,7 +1214,34 @@ private:
             // duplicate of the initial SYN segment should have been dropped
             // earlier.
 
-            this->_destroy_tcb(tcb_id);
+            switch (tcb->state) {
+            case tcb_t::SYN_RECEIVED:
+                TCP_DEBUG_STATE_CHANGE("SYN-RECEIVED", "CLOSED");
+                break;
+            case tcb_t::ESTABLISHED:
+                TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSED");
+                break;
+            case tcb_t::FIN_WAIT_1:
+                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSED");
+                break;
+            case tcb_t::FIN_WAIT_2:
+                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "CLOSED");
+                break;
+            case tcb_t::CLOSE_WAIT:
+                TCP_DEBUG_STATE_CHANGE("CLOSE-WAIT", "CLOSED");
+                break;
+            case tcb_t::CLOSING:
+                TCP_DEBUG_STATE_CHANGE("CLOSING", "CLOSED");
+                break;
+                break;
+            case tcb_t::LAST_ACK:
+                TCP_DEBUG_STATE_CHANGE("LAST-ACK", "CLOSED");
+                break;
+            default:
+                break;
+            };
+
+            this->_destroy_tcb(tcb_id, tcb);
 
             // TODO: A "connection reset" signal should be delivered to the
             // application layer.
@@ -1267,6 +1325,7 @@ private:
                 if (ack == tcb->tx_window.next) {
                     TCP_DEBUG_STATE_CHANGE("CLOSING", "TIME-WAIT");
                     tcb->state = tcb_t::TIME_WAIT;
+                    this->_schedule_fin_timeout(tcb_id, tcb);
                 } else
                     IGNORE_SEGMENT("in CLOSING state");
             }
@@ -1276,7 +1335,7 @@ private:
         ) {
             // When in the LAST-ACK state, if our FIN is now acknowledged,
             // delete the TCB and return.
-            return this->_destroy_tcb(tcb_id);
+            return this->_destroy_tcb(tcb_id, tcb);
         }
 
         // Could not be in the CLOSING state anymore.
@@ -1285,7 +1344,7 @@ private:
         // When in the LAST-ACK state, if our FIN is now acknowledged, delete
         // the TCB and return.
         if (tcb->in_state(tcb_t::LAST_ACK) && ack == tcb->tx_window.next)
-            return this->_destroy_tcb(tcb_id);
+            return this->_destroy_tcb(tcb_id, tcb);
 
         // TODO: processes URG segments.
 
@@ -1293,17 +1352,16 @@ private:
         // Processes the segment text and updates the reception window.
         //
 
-        bool must_ack_payload;
-
         if (
             tcb->in_state(
                 tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2
             ) && !payload.empty()
-        ) {
-            this->_handle_payload(seq, payload, tcb);
-            must_ack_payload = true;
-        } else 
-            must_ack_payload = false;
+        )
+            this->_handle_payload(seq, payload, tcb);;
+
+        //
+        // 
+        //
 
         //
         // Processes the FIN control bit and acknowledges the received segment.
@@ -1313,15 +1371,9 @@ private:
             // TODO: notify the application layer that the connection is closing
             // and returns an error value for any new call to receive().
 
-
-            // TODO: combine this acknowledgement of the received FIN with the
-            // acknowledgement of the received data.
-
             switch (tcb->state) {
             case tcb_t::ESTABLISHED:
                 ++tcb->rx_window.next;
-
-                this->_respond_with_ack_and_data_segment(saddr, hdr, tcb);
 
                 TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSE-WAIT");
                 tcb->state = tcb_t::CLOSE_WAIT;
@@ -1338,9 +1390,6 @@ private:
                     // otherwise we would already be in the FIN-WAIT-2 state.
 
                     assert(ack < tcb->tx_window.next);
-
-                    this->_respond_with_ack_segment(saddr, hdr, tcb);
-
                     TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSING");
                     tcb->state = tcb_t::CLOSING;
                 } else {
@@ -1352,42 +1401,111 @@ private:
                     // received the FIN before the application layer asked to
                     // close the connection.
 
-                    this->_respond_with_ack_and_data_segment(saddr, hdr, tcb);
-
                     TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "LAST-ACK");
                     tcb->state = tcb_t::LAST_ACK;
                 }
                 break;
             case tcb_t::FIN_WAIT_2:
-                this->_respond_with_ack_segment(saddr, hdr, tcb);
-
                 TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "TIME-WAIT");
                 tcb->state = tcb_t::TIME_WAIT;
 
-                // TODO: Start the time-wait timer, turn off the other timers.
+                this->_schedule_fin_timeout(tcb_id, tcb);
                 break;
             case tcb_t::TIME_WAIT:
                 // When in the TIME-WAIT state, this could only be a
                 // retransmission of the FIN. Restart the 2 MSL timeout.
-
-                this->_respond_with_ack_segment(saddr, hdr, tcb);
-
-                // TODO: restart the 2MSL timeout.
+                this->_reschedule_fin_timeout(tcb);
 
                 break;
             default:
                 // Remains in the same state.
                 break;
             };
-        } else if (must_ack_payload) {
-            // If no FIN bit and in a transmitting state, just acknowledges the
-            // received segment and transmits any pending data.
-            this->_respond_with_ack_and_data_segment(saddr, hdr, tcb);
+        }
+
+        //
+        // Acknowledges the received data and/or the FIN control bit.
+        //
+
+        if (tcb->rx_window.acked < tcb->rx_window.next) {
+            
+
+            if (tcb->in_state(
+                tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::CLOSE_WAIT |
+                tcb_t::LAST_ACK
+            ))
+                this->_respond_with_ack_and_data_segment(saddr, hdr, tcb);
+            else
+                this->_respond_with_ack_segment(saddr, hdr, tcb);
         }
     }
 
     #undef IGNORE_SEGMENT
+
+    // -------------------------------------------------------------------------
+    //
+    // Timers
+    //
+
+    // Removes the previous timer (if any) by the new one.
+    void _replace_timer(tcb_t *tcb, delay_t delay, function<void()> f)
+    {
+        if (tcb->timer != 0)
+            this->timers->remove(tcb->timer);
+
+        tcb->timer = this->timers->schedule(delay, f);
+    }
+
+    // Reschedules the same timeout with a new delay.
+    void _reschedule_timer(tcb_t *tcb, delay_t new_delay)
+    {
+        assert(tcb->timer != 0);
+        tcb->timer = this->timers->reschedule(tcb->timer, new_delay);
+    }
+
+    void _schedule_retransmit_timeout(tcb_id_t tcb_id, tcb_t *tcb)
+    {
+
+    }
+
+    // Schedules the last timeout used to close a TCP connection, while in the
+    // TIME-WAIT state.
+    void _schedule_fin_timeout(tcb_id_t tcb_id, tcb_t *tcb)
+    {
+        this->_replace_timer(
+            tcb, FIN_TIMEOUT, [this, tcb_id]() {
+                TCP_DEBUG_STATE_CHANGE("TIME-WAIT", "CLOSED");
+
+                // Reloads the TCB has it could have been reallocated.
+                auto it = this->tcbs.find(tcb_id);
+                assert(it != this->tcbs.end());
+
+                this->_destroy_tcb(tcb_id, &it->second);
+            }
+        );
+    }
+
+    // Restarts the FIN timeout. The last scheduled timer for this TCB must be
+    // a FIN timeout.
+    void _reschedule_fin_timeout(tcb_t *tcb)
+    {
+        this->_reschedule_timer(tcb, FIN_TIMEOUT);
+    }
+
     #undef TCP_DEBUG_STATE_CHANGE
+
+    // -------------------------------------------------------------------------
+    //
+    // TCB handling helpers
+    //
+
+    // Destroy resources allocated to a TCP connection.
+    void _destroy_tcb(tcb_id_t tcb_id, tcb_t *tcb)
+    {
+        if (tcb->timer != 0)
+            this->timers->remove(tcb->timer);
+        this->tcbs.erase(tcb_id);
+    }
 
     // -------------------------------------------------------------------------
     //
@@ -1513,17 +1631,6 @@ private:
 
     // -------------------------------------------------------------------------
     //
-    // TCB handling helpers
-    //
-
-    // Destroy resources allocated to a TCP connection.
-    void _destroy_tcb(tcb_id_t tcb_id)
-    {
-        // TODO
-    }
-
-    // -------------------------------------------------------------------------
-    //
     // Segment helpers
     //
 
@@ -1535,6 +1642,7 @@ private:
         const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack
     )
     {
+        
         options_t options = { (typename options_t::mss_option_t) this->mss };
         this->_send_segment(
             sport, daddr, dport, seq, ack, _SYN_ACK_FLAGS,
@@ -1633,7 +1741,8 @@ private:
     )
     {
         assert(tcb->in_state(
-            tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::LAST_ACK
+            tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::CLOSE_WAIT |
+            tcb_t::LAST_ACK
         ));
 
         // First sequence number that is outside of the transmission window.

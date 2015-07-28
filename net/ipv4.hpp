@@ -99,13 +99,14 @@ struct ipv4_t {
 
     // Redefines 'data_link_var_t' as 'data_link_t' so it can be accessible as a
     // member type.
-    typedef data_link_var_t                 data_link_t;
+    typedef data_link_var_t                         data_link_t;
 
-    typedef ipv4_t<data_link_t>             this_t;
+    typedef ipv4_t<data_link_t>                     this_t;
 
-    typedef ipv4_addr_t                     addr_t;
+    typedef ipv4_addr_t                             addr_t;
 
-    typedef typename data_link_t::cursor_t  cursor_t;
+    typedef typename data_link_t::timer_manager_t   timer_manager_t;
+    typedef typename data_link_t::cursor_t          cursor_t;
 
     struct header_t {
         #if __BYTE_ORDER == __LITTLE_ENDIAN
@@ -130,10 +131,10 @@ struct ipv4_t {
     } __attribute__ ((__packed__));
 
     // Lower layer address type.
-    typedef typename data_link_t::addr_t    data_link_addr_t;
+    typedef typename data_link_t::addr_t            data_link_addr_t;
 
     // Upper layer protocol type.
-    typedef tcp_t<this_t>                   tcp_ipv4_t;
+    typedef tcp_t<this_t>                           tcp_ipv4_t;
 
     //
     // Static fields
@@ -188,8 +189,8 @@ struct ipv4_t {
     // calling 'init()'.
     ipv4_t(
         data_link_t *_data_link, arp_t<data_link_t, this_t> *_arp,
-        net_t<addr_t> _addr
-    ) : data_link(_data_link), arp(_arp), tcp(this), addr(_addr)
+        net_t<addr_t> _addr, timer_manager_t *_timers
+    ) : data_link(_data_link), arp(_arp), tcp(this, _timers), addr(_addr)
     {
     }
 
@@ -197,13 +198,13 @@ struct ipv4_t {
     // and IPv4 address).
     void init(
         data_link_t *_data_link, arp_t<data_link_t, this_t> *_arp,
-        net_t<addr_t> _addr
+        net_t<addr_t> _addr, timer_manager_t *_timers
     )
     {
         data_link = _data_link;
         arp       = _arp;
         addr      = _addr;
-        tcp.init(this);
+        tcp.init(this, _timers);
     }
 
     // Processes an IPv4 datagram wich starts at the given cursor (data-link
