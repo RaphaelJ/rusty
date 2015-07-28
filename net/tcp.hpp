@@ -913,6 +913,8 @@ struct tcp_t {
 
                 tcb->tx_window.next += (seq_t) payload_size;
             } while (end_of_transmission > tcb->tx_window.next);
+
+            tcb->rx_window.acked = tcb->rx_window.next;
         }
     }
 
@@ -931,10 +933,8 @@ struct tcp_t {
             tcb_t::CLOSE_WAIT
         ));
 
-        if (tcb->in_state(tcb_t::SYN_SENT)) {
-            TCP_DEBUG_STATE_CHANGE("SYN-SENT", "CLOSED");
+        if (tcb->in_state(tcb_t::SYN_SENT))
             return this->_destroy_tcb(tcb_id);
-        }
 
         if (tcb->tx_queue_not_sent.empty()) {
             // Sends a FIN segment immediately.
@@ -968,6 +968,7 @@ private:
     static const flags_t _RST_ACK_FLAGS;    // <CTL=RST,ACK>
 
     // -------------------------------------------------------------------------
+
     //
     // TCP state machine handlers.
     //
@@ -1094,10 +1095,9 @@ private:
 
                 if (!hdr->flags.rst)
                     return this->_respond_with_rst_segment(saddr, hdr, payload);
-            } else if (UNLIKELY(hdr->flags.rst)) {
-                TCP_DEBUG_STATE_CHANGE("SYN-SENT", "CLOSED");
+            } else if (UNLIKELY(hdr->flags.rst))
                 return this->_destroy_tcb(tcb_id, tcb);
-            } else if (LIKELY(hdr->flags.syn)) {
+            else if (LIKELY(hdr->flags.syn)) {
                 // Moves into the ESTABLISHED state and acknowledges the
                 // received SYN/ACK segment.
 
@@ -1214,33 +1214,6 @@ private:
             // duplicate of the initial SYN segment should have been dropped
             // earlier.
 
-            switch (tcb->state) {
-            case tcb_t::SYN_RECEIVED:
-                TCP_DEBUG_STATE_CHANGE("SYN-RECEIVED", "CLOSED");
-                break;
-            case tcb_t::ESTABLISHED:
-                TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSED");
-                break;
-            case tcb_t::FIN_WAIT_1:
-                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSED");
-                break;
-            case tcb_t::FIN_WAIT_2:
-                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "CLOSED");
-                break;
-            case tcb_t::CLOSE_WAIT:
-                TCP_DEBUG_STATE_CHANGE("CLOSE-WAIT", "CLOSED");
-                break;
-            case tcb_t::CLOSING:
-                TCP_DEBUG_STATE_CHANGE("CLOSING", "CLOSED");
-                break;
-                break;
-            case tcb_t::LAST_ACK:
-                TCP_DEBUG_STATE_CHANGE("LAST-ACK", "CLOSED");
-                break;
-            default:
-                break;
-            };
-
             this->_destroy_tcb(tcb_id, tcb);
 
             // TODO: A "connection reset" signal should be delivered to the
@@ -1329,7 +1302,6 @@ private:
                 } else
                     IGNORE_SEGMENT("in CLOSING state");
             }
-
         } else if (
             tcb->in_state(tcb_t::LAST_ACK) && ack == tcb->tx_window.next
         ) {
@@ -1357,11 +1329,7 @@ private:
                 tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2
             ) && !payload.empty()
         )
-            this->_handle_payload(seq, payload, tcb);;
-
-        //
-        // 
-        //
+            this->_handle_payload(seq, payload, tcb);
 
         //
         // Processes the FIN control bit and acknowledges the received segment.
@@ -1428,8 +1396,6 @@ private:
         //
 
         if (tcb->rx_window.acked < tcb->rx_window.next) {
-            
-
             if (tcb->in_state(
                 tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::CLOSE_WAIT |
                 tcb_t::LAST_ACK
@@ -1441,6 +1407,53 @@ private:
     }
 
     #undef IGNORE_SEGMENT
+
+    // -------------------------------------------------------------------------
+
+    //
+    // TCB handling helpers
+    //
+
+    // Destroy resources allocated to a TCP connection.
+    void _destroy_tcb(tcb_id_t tcb_id, tcb_t *tcb)
+    {
+        switch (tcb->state) {
+        case tcb_t::SYN_SENT:
+            TCP_DEBUG_STATE_CHANGE("SYN-SENT", "CLOSED");
+            break;
+        case tcb_t::SYN_RECEIVED:
+            TCP_DEBUG_STATE_CHANGE("SYN-RECEIVED", "CLOSED");
+            break;
+        case tcb_t::ESTABLISHED:
+            TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSED");
+            break;
+        case tcb_t::FIN_WAIT_1:
+            TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSED");
+            break;
+        case tcb_t::FIN_WAIT_2:
+            TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "CLOSED");
+            break;
+        case tcb_t::CLOSE_WAIT:
+            TCP_DEBUG_STATE_CHANGE("CLOSE-WAIT", "CLOSED");
+            break;
+        case tcb_t::CLOSING:
+            TCP_DEBUG_STATE_CHANGE("CLOSING", "CLOSED");
+            break;
+        case tcb_t::LAST_ACK:
+            TCP_DEBUG_STATE_CHANGE("LAST-ACK", "CLOSED");
+            break;
+        case tcb_t::TIME_WAIT:
+            TCP_DEBUG_STATE_CHANGE("TIME-WAIT", "CLOSED");
+            break;
+        };
+
+        if (tcb->timer != 0)
+            this->timers->remove(tcb->timer);
+
+        this->tcbs.erase(tcb_id);
+    }
+
+    #undef TCP_DEBUG_STATE_CHANGE
 
     // -------------------------------------------------------------------------
     //
@@ -1474,8 +1487,6 @@ private:
     {
         this->_replace_timer(
             tcb, FIN_TIMEOUT, [this, tcb_id]() {
-                TCP_DEBUG_STATE_CHANGE("TIME-WAIT", "CLOSED");
-
                 // Reloads the TCB has it could have been reallocated.
                 auto it = this->tcbs.find(tcb_id);
                 assert(it != this->tcbs.end());
@@ -1492,22 +1503,8 @@ private:
         this->_reschedule_timer(tcb, FIN_TIMEOUT);
     }
 
-    #undef TCP_DEBUG_STATE_CHANGE
-
     // -------------------------------------------------------------------------
-    //
-    // TCB handling helpers
-    //
 
-    // Destroy resources allocated to a TCP connection.
-    void _destroy_tcb(tcb_id_t tcb_id, tcb_t *tcb)
-    {
-        if (tcb->timer != 0)
-            this->timers->remove(tcb->timer);
-        this->tcbs.erase(tcb_id);
-    }
-
-    // -------------------------------------------------------------------------
     //
     // Handle payload in segments
     //
@@ -1630,6 +1627,7 @@ private:
     }
 
     // -------------------------------------------------------------------------
+
     //
     // Segment helpers
     //
@@ -1642,7 +1640,6 @@ private:
         const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack
     )
     {
-        
         options_t options = { (typename options_t::mss_option_t) this->mss };
         this->_send_segment(
             sport, daddr, dport, seq, ack, _SYN_ACK_FLAGS,
@@ -1713,15 +1710,19 @@ private:
     // Responds to the received segment by acknowledging the most recently
     // received byte.
     //
+    // Updates the 'acked' field of the received window.
+    //
     // <SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK>.
     void _respond_with_ack_segment(
-        net_t<addr_t> saddr, const header_t *hdr, const tcb_t *tcb
+        net_t<addr_t> saddr, const header_t *hdr, tcb_t *tcb
     )
     {
         this->_send_ack_segment(
             hdr->dport, saddr, hdr->sport, tcb,
             tcb->tx_window.next, tcb->rx_window.next
         );
+
+        tcb->rx_window.acked = tcb->rx_window.next;
     }
 
     // Responds to the received segment by acknowledging the most recently
@@ -1734,6 +1735,8 @@ private:
     //
     // If the connection is in the FIN-WAIT-1 or LAST_ACK state, the FIN
     // control bit will be set in the segment holding the last data byte.
+    //
+    // Updates the 'acked' field of the received window.
     //
     // <SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK><payload>.
     void _respond_with_ack_and_data_segment(
@@ -1786,97 +1789,98 @@ private:
             if (n_entries < 1) {
                 // No more data in the transmission queue.
                 break;
-            } else {
-                // Fixes the value of 'payload_size' by removing the section
-                // of the first entry which already been sent.
-                {
-                    auto front = tcb->tx_queue_not_sent.front();
-                    payload_size -= (tcb->tx_window.next - front.begin).value;
-                }
+            }
 
-                // Set of entries to be sent.
-                vector<typename tcb_t::tx_queue_entry_t> to_send(n_entries);
-                copy(
-                    tcb->tx_queue_not_sent.begin(),
-                    tcb->tx_queue_not_sent.begin() + n_entries,
-                    to_send.begin()
-                );
+            // Fixes the value of 'payload_size' by removing the section
+            // of the first entry which already been sent.
+            {
+                auto front = tcb->tx_queue_not_sent.front();
+                payload_size -= (tcb->tx_window.next - front.begin).value;
+            }
 
-                // Moves entries from the 'tx_queue_not_sent' queue to the
-                // 'tx_queue_sent_unack' queue.
-                for (int i = 0; i < n_entries - 1; i++) {
-                    const auto &entry = tcb->tx_queue_not_sent.front();
+            // Set of entries to be sent.
+            vector<typename tcb_t::tx_queue_entry_t> to_send(n_entries);
+            copy(
+                tcb->tx_queue_not_sent.begin(),
+                tcb->tx_queue_not_sent.begin() + n_entries,
+                to_send.begin()
+            );
+
+            // Moves entries from the 'tx_queue_not_sent' queue to the
+            // 'tx_queue_sent_unack' queue.
+            for (int i = 0; i < n_entries - 1; i++) {
+                const auto &entry = tcb->tx_queue_not_sent.front();
+                tcb->tx_queue_sent_unack.push_back(entry);
+                tcb->tx_queue_not_sent.pop_front();
+            }
+
+            // Moves the last entry to the 'tx_queue_sent_unack' only if
+            // it is to be entirely send.
+            {
+                const auto &entry = tcb->tx_queue_not_sent.front();
+                if (entry.end <= end_of_seg) {
                     tcb->tx_queue_sent_unack.push_back(entry);
                     tcb->tx_queue_not_sent.pop_front();
                 }
-
-                // Moves the last entry to the 'tx_queue_sent_unack' only if
-                // it is to be entirely send.
-                {
-                    const auto &entry = tcb->tx_queue_not_sent.front();
-                    if (entry.end <= end_of_seg) {
-                        tcb->tx_queue_sent_unack.push_back(entry);
-                        tcb->tx_queue_not_sent.pop_front();
-                    }
-                }
-
-                // Creates a function which writes the content of multiple
-                // application level writers into a single network buffer.
-                function<void(cursor_t)> payload_writer =
-                    [seq = tcb->tx_window.next, to_send](cursor_t cursor)
-                    {
-                        assert(!to_send.empty());
-
-                        size_t offset = (to_send.front().begin - seq).value;
-
-                        for (const auto &entry : to_send) {
-                            assert(!cursor.empty());
-
-                            size_t length = (entry.end - offset).value;
-
-                            entry.writer(offset, cursor.take(length));
-                            cursor = cursor.drop(length);
-
-                            offset = entry.end.value;
-                        }
-
-                        assert(cursor.empty());
-                    };
-
-                if (
-                       tcb->in_state(tcb_t::FIN_WAIT_1 | tcb_t::LAST_ACK)
-                    && tcb->tx_queue_not_sent.empty()
-                ) {
-                    // It's the last data segment we will send, we add a FIN
-                    // control bit.
-
-                    this->_send_fin_ack_segment(
-                        hdr->dport, saddr, hdr->sport, tcb,
-                        tcb->tx_window.next, tcb->rx_window.next,
-                        payload_writer, payload_size
-                    );
-
-                    ++tcb->tx_window.next; // Transmitted FIN control bit.
-                } else {
-                    this->_send_ack_segment(
-                        hdr->dport, saddr, hdr->sport, tcb,
-                        tcb->tx_window.next, tcb->rx_window.next,
-                        payload_writer, payload_size
-                    );
-                }
-
-                // Updates the transmission window.
-                tcb->tx_window.next += (seq_t) payload_size;
-
-                ++segments_sent;
             }
+
+            // Creates a function which writes the content of multiple
+            // application level writers into a single network buffer.
+            function<void(cursor_t)> payload_writer =
+                [seq = tcb->tx_window.next, to_send](cursor_t cursor)
+                {
+                    assert(!to_send.empty());
+
+                    size_t offset = (to_send.front().begin - seq).value;
+
+                    for (const auto &entry : to_send) {
+                        assert(!cursor.empty());
+
+                        size_t length = (entry.end - offset).value;
+
+                        entry.writer(offset, cursor.take(length));
+                        cursor = cursor.drop(length);
+
+                        offset = entry.end.value;
+                    }
+
+                    assert(cursor.empty());
+                };
+
+            if (
+                   tcb->in_state(tcb_t::FIN_WAIT_1 | tcb_t::LAST_ACK)
+                && tcb->tx_queue_not_sent.empty()
+            ) {
+                // It's the last data segment we will send, we add a FIN
+                // control bit.
+
+                this->_send_fin_ack_segment(
+                    hdr->dport, saddr, hdr->sport, tcb,
+                    tcb->tx_window.next, tcb->rx_window.next,
+                    payload_writer, payload_size
+                );
+
+                ++tcb->tx_window.next; // Transmitted FIN control bit.
+            } else {
+                this->_send_ack_segment(
+                    hdr->dport, saddr, hdr->sport, tcb,
+                    tcb->tx_window.next, tcb->rx_window.next,
+                    payload_writer, payload_size
+                );
+            }
+
+            // Updates the transmission windows.
+            tcb->tx_window.next += (seq_t) payload_size;
+
+            ++segments_sent;
         }
 
         if (segments_sent < 1) {
             // We must at least send one segment to acknowledge the received
             // data.
             this->_respond_with_ack_segment(saddr, hdr, tcb);
-        }
+        } else
+            tcb->rx_window.acked = tcb->rx_window.next;
     }
 
     void _send_rst_segment(
@@ -1995,6 +1999,7 @@ private:
     );
 
     // -------------------------------------------------------------------------
+
     //
     // TCP options
     //
