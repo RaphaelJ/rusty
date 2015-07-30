@@ -170,10 +170,10 @@ struct cursor_t {
     // Complexity: O(n) with chained buffer, O(1) with unchained buffers.
     inline cursor_t drop(size_t n) const
     {
-        #ifdef MPIPE_CHAINED_BUFFERS
-            if (n >= size())
-                return EMPTY;
-            else {
+        if (n >= size())
+            return EMPTY;
+        else {
+            #ifdef MPIPE_CHAINED_BUFFERS
                 cursor_t cursor = *this;
                 while (n > 0 && n >= cursor.current_size) {
                     n -= cursor.current_size;
@@ -181,10 +181,10 @@ struct cursor_t {
                 }
 
                 return cursor._drop_in_buffer(n);
-            }
-        #else
-            return _drop_in_buffer(n);
-        #endif /* MPIPE_CHAINED_BUFFERS */
+            #else
+                return _drop_in_buffer(n);
+            #endif /* MPIPE_CHAINED_BUFFERS */
+        }
     }
 
     // Equivalent to 'drop(sizeof (T))'.
@@ -506,7 +506,8 @@ struct cursor_t {
                 cursor = *cursor._next;
             }
         #else
-            f(current, current_size);
+            if (!empty())
+                f(current, current_size);
         #endif /* MPIPE_CHAINED_BUFFERS */
     }
 

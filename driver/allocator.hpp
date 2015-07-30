@@ -48,12 +48,23 @@ template <typename T>
 struct tile_allocator_t {
     typedef T value_type;
 
+    // Uses a 'shared_ptr' to the 'tmc_mspace' with a destructor which frees the
+    // memory space once no more 'tile_allocator_t' are referencing it.
+
+    shared_ptr<tmc_mspace> mspace;
+
     // Creates an allocator which uses a tmc_alloc_t initialized with
     // TMC_ALLOC_INIT to allocate pages for the heap.
     inline tile_allocator_t(void)
     {
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
         _init_mspace(&alloc);
+    }
+
+    template <typename U>
+    inline tile_allocator_t(const tile_allocator_t<U>& other)
+        : mspace(other.mspace)
+    {
     }
 
     // Creates an allocator which uses the given tmc_alloc_t to allocate pages
@@ -121,7 +132,7 @@ struct tile_allocator_t {
 
     inline T* allocate(size_t length)
     {
-        return (T*) tmc_mspace_malloc(&_mspace, length * sizeof (T));
+        return (T*) tmc_mspace_malloc(*mspace, length * sizeof (T));
     }
 
     inline void deallocate(T* ptr, size_t length)
@@ -133,7 +144,7 @@ struct tile_allocator_t {
         const tile_allocator_t<T>& a, const tile_allocator_t<T>& b
     )
     {
-        return *(a._mspace) == *(b._mspace);
+        return *(a.mspace) == *(b.mspace);
     }
 
     friend inline bool operator!=(
@@ -144,15 +155,11 @@ struct tile_allocator_t {
     }
 
 private:
-    // Uses a 'shared_ptr' to the 'tmc_mspace' with a destructor which frees the
-    // memory space once no more 'tile_allocator_t' are referencing it.
-
-    shared_ptr<tmc_mspace> _mspace;
 
     inline void _init_mspace(tmc_alloc_t *alloc)
     {
-        _mspace = shared_ptr<tmc_mspace>(new tmc_mspace, _free_mspace);
-        *_mspace = tmc_mspace_create_special(0, TMC_MSPACE_SPINLOCK, alloc);
+        mspace = shared_ptr<tmc_mspace>(new tmc_mspace, _free_mspace);
+        *mspace = tmc_mspace_create_special(0, TMC_MSPACE_SPINLOCK, alloc);
     }
 
     static void _free_mspace(tmc_mspace *mspace)

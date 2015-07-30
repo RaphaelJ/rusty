@@ -1,5 +1,12 @@
 project (tcp-mpipe)
 
+# CFLAGS
+
+add_definitions(-DMPIPE_JUMBO_FRAMES)
+# add_definitions(-DNDEBUG)
+
+# End of CFLAGS
+
 cmake_minimum_required (VERSION 2.8)
 
 set (CMAKE_CC_FLAGS     "-g -Wall -std=c99")

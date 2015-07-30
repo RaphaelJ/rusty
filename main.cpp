@@ -74,40 +74,57 @@ int main(int argc, char **argv)
     // Tests the allocator.
     tile_allocator_t<int> allocator();
 
+    function<void()> do_nothing = []() { };
+
     mpipe.data_link.ipv4.tcp.listen(80,
-        [tcp=&mpipe.data_link.ipv4.tcp](mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
-            return [tcp, tcb_id](mpipe_t::cursor_t data) {
-                size_t size = data.size();
+        [tcp=&mpipe.data_link.ipv4.tcp, do_nothing]
+        (mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
+            MAIN_DEBUG(
+                "New connection from %s:%" PRIu16 " on port %" PRIu16,
+                mpipe_t::ipv4_mpipe_t::addr_t::to_alpha(tcb_id.raddr),
+                tcb_id.rport.host(), tcb_id.lport.host()
+            );
 
-                char *buffer = new char[size + 1];
-                data.read_with(
-                    [buffer, size](const char *input_buffer)
-                    {
-                        return memcpy(buffer, input_buffer, size);
-                    }, size
-                );
-                buffer[size] = '\0';
+            return (mpipe_t::tcp_mpipe_t::conn_handlers_t) {
+                [tcp, tcb_id, do_nothing](mpipe_t::cursor_t in)
+                {
+                    size_t size = in.size();
 
-                MAIN_DEBUG("Received %zu bytes: %s", size, buffer);
+                    in.read_with(
+                        [size](const char *buffer)
+                        {
+                            MAIN_DEBUG(
+                                "Received %zu bytes: %.*s", size, (int) size,
+                                buffer
+                            );
+                        }, size
+                    );
 
-                tcp->send(
-                    tcb_id, size,
-                    [buffer](size_t offset, mpipe_t::cursor_t out_cursor)
-                    {
-//                         char buffer[40] = { 0 };
-//                         MAIN_DEBUG(buffer, "Received %zu bytes\n", size);
-//                         printf("%s", buffer);
+                    tcp->send(
+                        tcb_id, size,
+                        [in](size_t offset, mpipe_t::cursor_t out) mutable
+                        {
+                            in.drop(offset)
+                              .take(out.size())
+                              .for_each(
+                                [&out](const char * buffer, size_t buffer_size)
+                                {
+                                    out = out.write(buffer, buffer_size);
+                                }
+                            );
+                        },
 
-//                         out_cursor.write(buffer + offset, 40);
-                        MAIN_DEBUG("Offset %zu", offset);
-                        out_cursor.write(buffer + offset, out_cursor.size());
-                    },
-                    [buffer]()
-                    {
-                        MAIN_DEBUG("ACKED");
-                        delete buffer;
-                    }
-                );
+                        do_nothing
+                    );
+                },
+
+                [tcp, tcb_id]()
+                {
+                    // Closes when the remote closes the connection.
+                    tcp->close(tcb_id);
+                },
+
+                do_nothing, do_nothing
             };
         }
     );
@@ -150,4 +167,3 @@ static bool _parse_args(int argc, char **argv, args_t *args)
 
 #undef MAIN_COLOR
 #undef MAIN_DEBUG
-

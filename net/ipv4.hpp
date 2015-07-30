@@ -21,6 +21,7 @@
 #ifndef __TCP_MPIPE_NET_IPV4_HPP__
 #define __TCP_MPIPE_NET_IPV4_HPP__
 
+#include <algorithm>            // min()
 #include <cstring>
 #include <functional>           // equal_to, hash
 #include <vector>
@@ -190,8 +191,11 @@ struct ipv4_t {
     ipv4_t(
         data_link_t *_data_link, arp_t<data_link_t, this_t> *_arp,
         net_t<addr_t> _addr, timer_manager_t *_timers
-    ) : data_link(_data_link), arp(_arp), tcp(this, _timers), addr(_addr)
+    ) : data_link(_data_link), arp(_arp), addr(_addr)
     {
+        // TCP must be initialized after max_payload_size
+        max_payload_size = this->_max_payload_size();
+        tcp.init(this, _timers);
     }
 
     // Initializes an IPv4 environment for the given data-link layer instance
@@ -201,9 +205,10 @@ struct ipv4_t {
         net_t<addr_t> _addr, timer_manager_t *_timers
     )
     {
-        data_link = _data_link;
-        arp       = _arp;
-        addr      = _addr;
+        data_link        = _data_link;
+        arp              = _arp;
+        addr             = _addr;
+        max_payload_size = this->_max_payload_size();
         tcp.init(this, _timers);
     }
 
@@ -427,7 +432,9 @@ private:
 
     size_t _max_payload_size(void)
     {
-        return min(this->data_link->max_payload_size, 65535) - HEADER_SIZE;
+        // IPv4 datagrams can't be larger than 65,535 bytes.
+        return   min(this->data_link->max_payload_size, (size_t) 65535)
+               - HEADER_SIZE;
     }
 };
 

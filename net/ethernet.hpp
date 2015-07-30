@@ -150,9 +150,11 @@ struct ethernet_t {
     ethernet_t(
         phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
         net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
-    ) : phys(_phys), max_payload_size(_max_payload_size()),
-        addr(_addr), arp(this, &ipv4), ipv4(this, &arp, ipv4_addr, _timers)
+    ) : phys(_phys), addr(_addr)
     {
+        max_payload_size = _max_payload_size();
+        arp.init(this, _timers, &ipv4);
+        ipv4.init(this, &arp, ipv4_addr, _timers);
     }
 
     // Initializes an Ethernet environment for the given physical layer
@@ -291,8 +293,7 @@ private:
 
     size_t _max_payload_size(void)
     {
-        // NOTE: doesn't support Jumbo frames.
-        return min<size_t>(this->phys->max_packet_size - HEADER_SIZE, 1500);
+        return this->phys->max_packet_size - HEADER_SIZE;
     }
 };
 

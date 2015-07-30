@@ -31,7 +31,7 @@
 #include <map>
 #include <tuple>
 #include <unordered_map>
-#include <utility>                  // pair, swap()
+#include <utility>                  // swap()
 
 #include <netinet/tcp.h>            // TCPOPT_EOL, TCPOPT_NOP, TCPOPT_MAXSEG
 
@@ -288,15 +288,38 @@ struct tcp_t {
     };
 
     // Uniquely identifies a TCP Control Block or a connection.
-    typedef tcp_tcb_id_t<addr_t, port_t>            tcb_id_t;
+    typedef tcp_tcb_id_t<addr_t, port_t>        tcb_id_t;
 
-    // Callback called on an open connection when it receives data.
-    typedef function<void(cursor_t)>                new_data_callback_t;
+    // Set of functions provided by the application layer to handle events of
+    // a connection.
+    struct conn_handlers_t {
+        // Called when the connection receives new data.
+        function<void(cursor_t)>                new_data;
+
+        // Called when the remote asked to close the connection.
+        //
+        // The application layer can still send new data using 'send()' but no
+        // new data will ever be received.
+        function<void()>                        remote_close;
+
+        // Called when both ends closed the connection. Resources allocated for
+        // the connection should be released.
+        //
+        // No more data can be received nor sent.
+        function<void()>                        close;
+
+        // The connection has been unexpectedly closed (connection reset).
+        // Resources allocated for the connection should be released.
+        //
+        // No more data can be received nor sent.
+        function<void()>                        reset;
+    };
 
     // Callback called on new connections on a port open in the LISTEN state.
     //
     // The function is given the identifier of the new established connection.
-    typedef function<new_data_callback_t(tcb_id_t)> new_connection_callback_t;
+    typedef function<conn_handlers_t(tcb_id_t)> new_conn_callback_t;
+
 
     // Function given to 'send()' which writes data into a transmission buffer.
     //
@@ -306,11 +329,11 @@ struct tcp_t {
     // The number of bytes to write is given by the cursor size. The function
     // could be called an undefined number of times, with different offsets,
     // because of packet segmentation and retransmission.
-    typedef function<void(size_t, cursor_t)>        writer_t;
+    typedef function<void(size_t, cursor_t)>    writer_t;
 
     // Callback given to 'send()' which will be called once all the data
     // provided by the writer has been acked by the remote.
-    typedef function<void()>                        acked_callback_t;
+    typedef function<void()>                    acked_callback_t;
 
     // TCP Control Block.
     //
@@ -527,9 +550,9 @@ struct tcp_t {
         // out of order.
         vector<out_of_order_segment_t>  out_of_order;
 
-        // Function provided by the application layer which will be called each
-        // time new data is received.
-        new_data_callback_t             new_data_callback;
+        // Functions provided by the application layer to manage connection
+        // events.
+        conn_handlers_t                 conn_handlers;
 
         //
         // Transmission queue
@@ -614,7 +637,7 @@ struct tcp_t {
     // number of out of order segments), but shouldn't be an issue as storing a
     // large a number of out of order segments is not appealing (Linux use 3 as
     // default value).
-    static constexpr size_t     MAX_OUT_OF_ORDER_SEGS   = 5;
+    static constexpr size_t     MAX_OUT_OF_ORDER_SEGS   = 3;
 
     //
     // Fields
@@ -623,14 +646,14 @@ struct tcp_t {
     // Lower network layer instance.
     network_t                                               *network;
 
-    timer_manager_t         *timers;
+    timer_manager_t                                         *timers;
 
     // Ports which are in the LISTEN state, passively waiting for client
     // connections.
     //
     // Each open port maps to a callback function provided by the application to
     // handle new connections.
-    unordered_map<net_t<port_t>, new_connection_callback_t> listens;
+    unordered_map<net_t<port_t>, new_conn_callback_t>       listens;
 
     // TCP Control Blocks for active connections.
     unordered_map<tcb_id_t, tcb_t>                          tcbs;
@@ -801,11 +824,11 @@ struct tcp_t {
     //
     // If the port was already in the listen state, replaces the previous
     // callback function.
-    void listen(port_t port, new_connection_callback_t new_connection_callback)
+    void listen(port_t port, new_conn_callback_t new_conn_callback)
     {
         assert(this->listens.find(port) == this->listens.end());
 
-        this->listens.emplace(port, new_connection_callback);
+        this->listens.emplace(port, new_conn_callback);
 
         TCP_DEBUG(
             "State change for local port %" PRIu16 ": from CLOSED to LISTEN",
@@ -860,7 +883,7 @@ struct tcp_t {
             if (tcb->tx_queue_not_sent.empty())
                 entry.begin = tcb->tx_window.next;
             else
-                entry.begin = tcb->tx_queue_not_sent.front().end;
+                entry.begin = tcb->tx_queue_not_sent.back().end;
 
             entry.end = entry.begin + seq_t(length);
             tcb->tx_queue_not_sent.push_back(entry);
@@ -933,8 +956,10 @@ struct tcp_t {
             tcb_t::CLOSE_WAIT
         ));
 
-        if (tcb->in_state(tcb_t::SYN_SENT))
+        if (tcb->in_state(tcb_t::SYN_SENT)) {
+            tcb->conn_handlers.close();
             return this->_destroy_tcb(tcb_id);
+        }
 
         if (tcb->tx_queue_not_sent.empty()) {
             // Sends a FIN segment immediately.
@@ -950,6 +975,9 @@ struct tcp_t {
             break;
         case tcb_t::CLOSE_WAIT:
             tcb->state = tcb_t::LAST_ACK;
+            tcb->conn_handlers.close();
+            break;
+        default:
             break;
         };
     }
@@ -982,7 +1010,7 @@ private:
     void _handle_listen_state(
         net_t<addr_t> saddr, const header_t *hdr, tcb_id_t tcb_id,
         options_t options, cursor_t payload,
-        const new_connection_callback_t *new_connection_callback
+        const new_conn_callback_t *new_conn_callback
     )
     {
         if (UNLIKELY(hdr->flags.rst)) {
@@ -1043,14 +1071,13 @@ private:
 
             // Copies the callback before calling it as it could be removed
             // while being called.
-            new_connection_callback_t callback = *new_connection_callback;
-
-            new_data_callback_t new_data_callback = callback(tcb_id);
+            new_conn_callback_t callback = *new_conn_callback;
+            conn_handlers_t conn_handlers = callback(tcb_id);
 
             // As the new connection callback could have initiated a new
             // connection, and subsequently modified the 'tcbs' map, the 'tcb'
             // pointer is now potentially invalidated and must be reacquired
-            // before assigning it the 'new_data_callback'.
+            // before assigning it the 'conn_handler'.
 
             auto tcb_it = this->tcbs.find(tcb_id);
 
@@ -1060,7 +1087,7 @@ private:
             assert(tcb_it != this->tcbs.end());
 
             tcb = &tcb_it->second;
-            tcb->new_data_callback = new_data_callback;
+            tcb->conn_handlers = conn_handlers;
         } else {
             // Any other segment is not valid and should be ignored.
             IGNORE_SEGMENT("invalid segment");
@@ -1096,7 +1123,7 @@ private:
                 if (!hdr->flags.rst)
                     return this->_respond_with_rst_segment(saddr, hdr, payload);
             } else if (UNLIKELY(hdr->flags.rst))
-                return this->_destroy_tcb(tcb_id, tcb);
+                this->_reset_tcb(tcb_id, tcb);
             else if (LIKELY(hdr->flags.syn)) {
                 // Moves into the ESTABLISHED state and acknowledges the
                 // received SYN/ACK segment.
@@ -1202,22 +1229,15 @@ private:
             IGNORE_SEGMENT("unexpected sequence number");
         }
 
-        if (UNLIKELY(hdr->flags.rst)) {
-            // TODO: in SYN-RECEIVED, ESTABLISHED, FIN-WAIT-1, FIN-WAIT-2 &
-            // CLOSE-WAIT states, an error should be delivered to the
-            // application layer.
-            return this->_destroy_tcb(tcb_id, tcb);
-        }
+        if (UNLIKELY(hdr->flags.rst))
+            return this->_reset_tcb(tcb_id, tcb);
 
         if (UNLIKELY(hdr->flags.syn)) {
             // Only invalid SYN segment should reach this stage, as any
             // duplicate of the initial SYN segment should have been dropped
             // earlier.
 
-            this->_destroy_tcb(tcb_id, tcb);
-
-            // TODO: A "connection reset" signal should be delivered to the
-            // application layer.
+            this->_reset_tcb(tcb_id, tcb);
 
             return this->_respond_with_rst_segment(saddr, hdr, payload);
         }
@@ -1252,7 +1272,7 @@ private:
         // Updates the transmission window according to the received ACK number.
         if (tcb->in_state(
             tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2 |
-            tcb_t::CLOSE_WAIT | tcb_t::CLOSING
+            tcb_t::CLOSE_WAIT | tcb_t::CLOSING | tcb_t::LAST_ACK
         )) {
             if (LIKELY(acceptable_ack)) {
                 tcb->tx_window.unack = ack;
@@ -1282,14 +1302,10 @@ private:
             if (
                    tcb->in_state(tcb_t::FIN_WAIT_1)
                 && ack == tcb->tx_window.next
-                && tcb->tx_queue_sent_unack.empty()
                 && tcb->tx_queue_not_sent.empty()
             ) {
                 TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "FIN-WAIT-2");
                 tcb->state = tcb_t::FIN_WAIT_2;
-
-                // TODO: When entering the FIN-WAIT-2 state, the application
-                // layer should be notified that the connection is closed.
             }
 
             // When in the CLOSING state, if the FIN is acknowledged, enters
@@ -1303,7 +1319,9 @@ private:
                     IGNORE_SEGMENT("in CLOSING state");
             }
         } else if (
-            tcb->in_state(tcb_t::LAST_ACK) && ack == tcb->tx_window.next
+               tcb->in_state(tcb_t::LAST_ACK)
+            && ack == tcb->tx_window.next
+            && tcb->tx_queue_not_sent.empty()
         ) {
             // When in the LAST-ACK state, if our FIN is now acknowledged,
             // delete the TCB and return.
@@ -1312,11 +1330,6 @@ private:
 
         // Could not be in the CLOSING state anymore.
         assert(!tcb->in_state(tcb_t::CLOSING));
-
-        // When in the LAST-ACK state, if our FIN is now acknowledged, delete
-        // the TCB and return.
-        if (tcb->in_state(tcb_t::LAST_ACK) && ack == tcb->tx_window.next)
-            return this->_destroy_tcb(tcb_id, tcb);
 
         // TODO: processes URG segments.
 
@@ -1345,6 +1358,8 @@ private:
 
                 TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSE-WAIT");
                 tcb->state = tcb_t::CLOSE_WAIT;
+
+                tcb->conn_handlers.remote_close();
                 break;
             case tcb_t::FIN_WAIT_1:
                 ++tcb->rx_window.next;
@@ -1372,12 +1387,18 @@ private:
                     TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "LAST-ACK");
                     tcb->state = tcb_t::LAST_ACK;
                 }
+
+                tcb->conn_handlers.remote_close();
+                tcb->conn_handlers.close();
                 break;
             case tcb_t::FIN_WAIT_2:
                 TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "TIME-WAIT");
                 tcb->state = tcb_t::TIME_WAIT;
 
                 this->_schedule_fin_timeout(tcb_id, tcb);
+
+                tcb->conn_handlers.remote_close();
+                tcb->conn_handlers.close();
                 break;
             case tcb_t::TIME_WAIT:
                 // When in the TIME-WAIT state, this could only be a
@@ -1395,7 +1416,10 @@ private:
         // Acknowledges the received data and/or the FIN control bit.
         //
 
-        if (tcb->rx_window.acked < tcb->rx_window.next) {
+        if (
+               tcb->rx_window.acked < tcb->rx_window.next
+            || !tcb->tx_queue_not_sent.empty()
+        ) {
             if (tcb->in_state(
                 tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::CLOSE_WAIT |
                 tcb_t::LAST_ACK
@@ -1414,7 +1438,18 @@ private:
     // TCB handling helpers
     //
 
-    // Destroy resources allocated to a TCP connection.
+    // Destroys resources allocated to a TCP connection.
+    void _destroy_tcb(tcb_id_t tcb_id)
+    {
+        auto it = this->tcbs.find(tcb_id);
+        assert(it != this->tcbs.end());
+
+        // TODO: reuse the 'tcbs' iterator to remote the TCB.
+
+        this->_destroy_tcb(tcb_id, &it->second);
+    }
+
+    // Destroys resources allocated to a TCP connection.
     void _destroy_tcb(tcb_id_t tcb_id, tcb_t *tcb)
     {
         switch (tcb->state) {
@@ -1451,6 +1486,24 @@ private:
             this->timers->remove(tcb->timer);
 
         this->tcbs.erase(tcb_id);
+    }
+
+    // Destroys resources allocated to a TCP connection and signal
+    // application layer that the connection has been resetted.
+    void _reset_tcb(tcb_id_t tcb_id, tcb_t *tcb)
+    {
+        if (tcb->in_state(
+            tcb_t::SYN_SENT | tcb_t::SYN_RECEIVED | tcb_t::ESTABLISHED |
+            tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2 | tcb_t::CLOSE_WAIT
+        )) {
+            tcb->conn_handlers.reset();
+
+            // Reloads the TCB has it could have been reallocated while calling
+            // the handler.
+            tcb = &this->tcbs.find(tcb_id)->second;
+        }
+
+        this->_destroy_tcb(tcb_id, tcb);
     }
 
     #undef TCP_DEBUG_STATE_CHANGE
@@ -1623,7 +1676,7 @@ private:
 
         tcb->rx_window.next += seq_t(payload_size);
 
-        tcb->new_data_callback(payload);
+        tcb->conn_handlers.new_data(payload);
     }
 
     // -------------------------------------------------------------------------
@@ -1783,7 +1836,6 @@ private:
                     payload_size -= (it->end - end_of_seg).value;
                     break;
                 }
-
             }
 
             if (n_entries < 1) {
@@ -1827,21 +1879,24 @@ private:
             // Creates a function which writes the content of multiple
             // application level writers into a single network buffer.
             function<void(cursor_t)> payload_writer =
-                [seq = tcb->tx_window.next, to_send](cursor_t cursor)
+                [start_seq = tcb->tx_window.next, to_send](cursor_t cursor)
                 {
                     assert(!to_send.empty());
 
-                    size_t offset = (to_send.front().begin - seq).value;
+                    seq_t seq = start_seq;
 
                     for (const auto &entry : to_send) {
                         assert(!cursor.empty());
+                        assert(entry.begin <= seq);
+                        assert(entry.end > seq);
 
-                        size_t length = (entry.end - offset).value;
+                        size_t offset = (seq - entry.begin).value,
+                               length = (entry.end - seq).value;
 
                         entry.writer(offset, cursor.take(length));
                         cursor = cursor.drop(length);
 
-                        offset = entry.end.value;
+                        seq = entry.end;
                     }
 
                     assert(cursor.empty());
@@ -1943,6 +1998,8 @@ private:
         net_t<addr_t> saddr = this->network->addr;
         size_t seg_size = HEADER_SIZE + options.size() + payload_size;
 
+        assert(seg_size - HEADER_SIZE <= this->mss);
+
         // Precomputes the sum of the pseudo header.
         partial_sum_t pseudo_hdr_sum =
             network_t::tcp_pseudo_header_sum(
@@ -1959,8 +2016,9 @@ private:
             cursor_t hdr_cursor = cursor;
 
             auto ret = _write_options(cursor.drop(HEADER_SIZE), options);
-            partial_sum_t options_sum = ret.second;
-            cursor_t payload_cursor = ret.first;
+            cursor_t      payload_cursor = get<0>(ret);
+            partial_sum_t options_sum    = get<1>(ret);
+            size_t        options_size   = get<2>(ret);
 
             payload_writer(payload_cursor);
             partial_sum_t payload_sum = partial_sum_t(payload_cursor);
@@ -1970,9 +2028,9 @@ private:
                                                       .append(payload_sum);
 
             _write_header(
-                hdr_cursor, sport, dport, seq, ack, flags, window, partial_sum
+                hdr_cursor, sport, dport, seq, ack, flags, window, options_size,
+                partial_sum
             );
-
         });
     }
 
@@ -1995,7 +2053,7 @@ private:
     static cursor_t _write_header(
         cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
-        net_t<win_size_t> window, partial_sum_t partial_sum
+        net_t<win_size_t> window, size_t options_size, partial_sum_t partial_sum
     );
 
     // -------------------------------------------------------------------------
@@ -2020,9 +2078,9 @@ private:
 
     // Writes the TCP options starting at the given buffer cursor.
     //
-    // Returns the cursor to write data after the options and the partial sum of
-    // the options.
-    static pair<cursor_t, partial_sum_t> _write_options(
+    // Returns the cursor to write data after the options, the partial sum of
+    // the options, and the length of the option in bytes.
+    static tuple<cursor_t, partial_sum_t, size_t> _write_options(
         cursor_t cursor, options_t options
     );
 
@@ -2053,7 +2111,7 @@ tcp_t<network_t>::_SYN_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 1 /* SYN */, 0);
 
 template <typename network_t>
 const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_FIN_ACK_FLAGS(1 /* FIN */, 1 /* ACK */, 0, 0, 0, 0);
+tcp_t<network_t>::_FIN_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 0, 1 /* FIN */);
 
 template <typename network_t>
 const typename tcp_t<network_t>::flags_t
@@ -2073,25 +2131,26 @@ template <typename network_t>
 typename tcp_t<network_t>::cursor_t
 tcp_t<network_t>::_write_header(
     cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
-    net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
-    net_t<uint16_t> window, partial_sum_t partial_sum
+    net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags, net_t<uint16_t> window,
+    size_t options_size, partial_sum_t partial_sum
 )
 {
     return cursor.template write_with<header_t>(
-    [sport, dport, seq, ack, flags, window, partial_sum](header_t *hdr) {
+    [sport, dport, seq, ack, flags, window, options_size, partial_sum]
+    (header_t *hdr) {
         hdr->sport   = sport;
         hdr->dport   = dport;
         hdr->seq     = seq;
         hdr->ack     = ack;
         hdr->res     = 0;
-        hdr->doff    = HEADER_SIZE / sizeof (uint32_t);
+        hdr->doff    = (HEADER_SIZE + options_size) / sizeof (uint32_t);
         hdr->flags   = flags;
         hdr->window  = window;
         hdr->check   = checksum_t::ZERO;
         hdr->urg_ptr = 0;
 
         hdr->check = checksum_t(
-            partial_sum.append(partial_sum_t(hdr, HEADER_SIZE))
+            partial_sum_t(hdr, HEADER_SIZE).append(partial_sum)
         );
     });
 }
@@ -2173,8 +2232,9 @@ tcp_t<network_t>::_parse_options(
 
     return options;
 }
+
 template <typename network_t>
-pair<typename tcp_t<network_t>::cursor_t, partial_sum_t>
+tuple<typename tcp_t<network_t>::cursor_t, partial_sum_t, size_t>
 tcp_t<network_t>::_write_options(cursor_t cursor, options_t options)
 {
     if (options.mss != options_t::NO_MSS_OPTION) {
@@ -2191,9 +2251,9 @@ tcp_t<network_t>::_write_options(cursor_t cursor, options_t options)
             partial_sum = partial_sum_t(data_char, 4);
         }, 4);
 
-        return { cursor, partial_sum };
+        return make_tuple(cursor, partial_sum, 4);
     } else
-        return { cursor, partial_sum_t::ZERO };
+        return make_tuple(cursor, partial_sum_t::ZERO, 0);
 }
 
 template <typename network_t>

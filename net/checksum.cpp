@@ -96,7 +96,7 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
     //
     // [1]: http://tools.ietf.org/html/rfc1071
 
-    assert (data != nullptr && size >= 0);
+    assert(data != nullptr);
 
     uint64_t       sum      = 0;
     const uint32_t *data32  = (const uint32_t *) ((intptr_t) data & ~0x3);
@@ -104,6 +104,7 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
     // Processes the first bytes not aligned on 32 bits.
     intptr_t unaligned_offset = (intptr_t) data & 0x3;
     if (unaligned_offset) {
+        size_t   unaligned_bytes  = sizeof (uint32_t) - unaligned_offset;
         // Loads the entire first word but masks the bytes which are before the
         // buffer. This should be safe as memory pages should be word-aligned.
 
@@ -115,13 +116,27 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
             #error "Please set __BYTE_ORDER in <bits/endian.h>"
         #endif
 
+        if (unaligned_bytes > size) {
+            // Masks the bytes that are after the buffer.
+            size_t mask_right = unaligned_bytes - size;
+            unaligned_bytes = size;
+
+            #if __BYTE_ORDER == __LITTLE_ENDIAN
+                word_mask &= 0xFFFFFFFF >> (mask_right * 8);
+            #elif __BYTE_ORDER == __BIG_ENDIAN
+                word_mask &= 0xFFFFFFFF << (mask_right * 8);
+            #else
+                #error "Please set __BYTE_ORDER in <bits/endian.h>"
+            #endif
+        }
+
         sum += data32[0] & word_mask;
-        size -= 4 - unaligned_offset;
+        size -= unaligned_bytes;
         data32++;
     }
 
     // Sums 32 bits at a time.
-    while (size > sizeof (uint32_t)) {
+    while (size >= sizeof (uint32_t)) {
         sum += *data32;
         size -= sizeof (uint32_t);
         data32++;
@@ -133,10 +148,12 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
         // buffer. This should be safe as a memory page should never end on a
         // word boundary.
 
+        size_t mask_right = sizeof (uint32_t) - size;
+
         #if __BYTE_ORDER == __LITTLE_ENDIAN
-            uint32_t word_mask = 0xFFFFFFFF >> ((4 - unaligned_offset) * 8);
+            uint32_t word_mask = 0xFFFFFFFF >> (mask_right * 8);
         #elif __BYTE_ORDER == __BIG_ENDIAN
-            uint32_t word_mask = 0xFFFFFFFF << ((4 - unaligned_offset) * 8);
+            uint32_t word_mask = 0xFFFFFFFF << (mask_right * 8);
         #else
             #error "Please set __BYTE_ORDER in <bits/endian.h>"
         #endif

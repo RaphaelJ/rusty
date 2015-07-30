@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <utility>              // min()
 
 #include <gxio/mpipe.h>         // gxio_mpipe_*
 #include <net/ethernet.h>       // struct ether_addr
@@ -34,6 +35,7 @@
                                 // tmc_alloc_set_pagesize().
 
 #include "driver/driver.hpp"    // VERIFY_ERRNO, VERIFY_GXIO
+#include "driver/buffer.hpp"    // cursor_t
 #include "net/endian.hpp"       // net_t
 #include "net/ethernet.hpp"     // ethernet_t
 
@@ -87,8 +89,10 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
         result = gxio_mpipe_link_open(link, context, link_name, 0);
         VERIFY_GXIO(result, "gxio_mpipe_link_open()");
 
-        // // Enable JUMBO ethernet packets
-        // gxio_mpipe_link_set_attr(link, GXIO_MPIPE_LINK_RECEIVE_JUMBO, 1);
+        #ifdef MPIPE_JUMBO_FRAMES
+            // Enable JUMBO ethernet packets
+            gxio_mpipe_link_set_attr(link, GXIO_MPIPE_LINK_RECEIVE_JUMBO, 1);
+        #endif
     }
 
     //
@@ -376,6 +380,11 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
                 return a.info->size < b.info->size;
             }
         );
+
+        #ifndef MPIPE_JUMBO_FRAMES
+            gxio_mpipe_link_set_attr(&link, GXIO_MPIPE_LINK_RECEIVE_JUMBO, 1);
+        #endif /* MPIPE_JUMBO_FRAMES */
+
     }
 
     //
@@ -405,11 +414,15 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
     //
 
     {
-        data_link.init(this, &timers, _ether_addr(&this->link), ipv4_addr);
-
         max_packet_size = this->buffer_stacks.back().buffer_size;
 
+        #ifndef MPIPE_JUMBO_FRAMES
+            max_packet_size = min((size_t) 1500, max_packet_size);
+        #endif /* MPIPE_JUMBO_FRAMES */
+
         DRIVER_DEBUG("Maximum packet size: %zu bytes", max_packet_size);
+
+        data_link.init(this, &timers, _ether_addr(&this->link), ipv4_addr);
     }
 }
 
@@ -443,8 +456,6 @@ void mpipe_t::run(void)
         DRIVER_DEBUG("Receives a %zu bytes packet", cursor.size());
 
         this->data_link.receive_frame(cursor);
-
-        // gxio_mpipe_iqueue_drop(&this->iqueue, &idesc);
     }
 }
 
@@ -458,13 +469,11 @@ void mpipe_t::send_packet(
     DRIVER_DEBUG("Sends a %zu bytes packet", packet_size);
 
     // Allocates a buffer and executes the 'packet_writer' on its memory.
-
     gxio_mpipe_bdesc_t bdesc = _alloc_buffer(packet_size);
 
     // Allocates an unmanaged cursor, which will not desallocate the buffer when
     // destr
     cursor_t cursor(&this->context, &bdesc, packet_size, false);
-
     packet_writer(cursor);
 
     // Creates the egress descriptor.

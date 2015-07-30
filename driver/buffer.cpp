@@ -21,11 +21,14 @@
 #include <cstdint>
 #include <memory>               // shared_ptr, make_shared
 
+#include <arch/cycle.h>         // get_cycle_count()
+
 #include <gxio/mpipe.h>         // MPIPE_EDMA_DESC_*
 
 #include "driver/driver.hpp"
 
 #include "driver/buffer.hpp"
+#include "driver/allocator.hpp"
 
 namespace tcp_mpipe {
 namespace driver {
@@ -64,6 +67,7 @@ void cursor_t::_init_with_bdesc(
 
     // Allocates a manageable buffer descriptor.
     desc = make_shared<_buffer_desc_t>(context, *bdesc, is_managed);
+    // desc = allocate_shared<_buffer_desc_t>(allocator, context, *bdesc, is_managed);
 
     // The last 42 bits of the buffer descriptor contain the virtual address of
     // the buffer with the lower 7 bits being the offset of packet data inside

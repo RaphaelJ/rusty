@@ -79,17 +79,22 @@ struct buffer_stack_info_t {
         : size(size), count(count) { }
 };
 
-static const array<buffer_stack_info_t, 8> BUFFERS_STACKS {
+#ifdef MPIPE_JUMBO_FRAMES
+    static const array<buffer_stack_info_t, 8> BUFFERS_STACKS {
+#else
+    static const array<buffer_stack_info_t, 5> BUFFERS_STACKS {
+#endif /* MPIPE_JUMBO_FRAMES */
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_128,   800), // ~ 100 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_256,   800), // ~ 200 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_512,   800), // ~ 400 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1024,  400), // ~ 400 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1664,  400), // ~ 650 KB
 
-    // Only relevant if jumbo frames are allowed:
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  0),
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_10368, 0),
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_16384, 0)
+    #ifdef MPIPE_JUMBO_FRAMES
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  100), // ~ 400 KB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_10368, 100), // ~ 1 MB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_16384, 50)   // ~ 800 KB
+    #endif /* MPIPE_JUMBO_FRAMES */
 };
 
 // -----------------------------------------------------------------------------
