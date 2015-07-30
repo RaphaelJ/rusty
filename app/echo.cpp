@@ -2,6 +2,11 @@
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
 //
+// Echo server. Replies to requests on a port with a copy of the received
+// message.
+//
+// Usage: ./app/echo <link> <ipv4> <TCP port>
+//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
@@ -46,8 +51,9 @@ using namespace tcp_mpipe::net;
 
 // Parsed CLI arguments.
 struct args_t {
-    char                *link_name;
-    net_t<ipv4_addr_t>  ipv4_addr;
+    char                            *link_name;
+    net_t<ipv4_addr_t>              ipv4_addr;
+    mpipe_t::tcp_mpipe_t::port_t    tcp_port;
 };
 
 static void _print_usage(char **argv);
@@ -65,10 +71,11 @@ int main(int argc, char **argv)
     mpipe_t mpipe(args.link_name, args.ipv4_addr);
 
     MAIN_DEBUG(
-        "Starts the mPIPE driver interface %s (%s) with %s as IPv4 address",
+        "Starts the echo server on interface %s (%s) with %s as IPv4 address "
+        "on port %d",
         args.link_name,
-        ethernet_t<mpipe_t>::addr_t::to_alpha(mpipe.data_link.addr),
-        ipv4_t<ethernet_t<mpipe_t>>::addr_t::to_alpha(args.ipv4_addr)
+        mpipe_t::ethernet_mpipe_t::addr_t::to_alpha(mpipe.data_link.addr),
+        mpipe_t::ipv4_mpipe_t::addr_t::to_alpha(args.ipv4_addr), args.tcp_port
     );
 
     // Tests the allocator.
@@ -76,7 +83,8 @@ int main(int argc, char **argv)
 
     function<void()> do_nothing = []() { };
 
-    mpipe.data_link.ipv4.tcp.listen(80,
+    mpipe.data_link.ipv4.tcp.listen(
+        args.tcp_port,
         [tcp=&mpipe.data_link.ipv4.tcp, do_nothing]
         (mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
             MAIN_DEBUG(
@@ -139,7 +147,7 @@ int main(int argc, char **argv)
 
 static void _print_usage(char **argv)
 {
-    fprintf(stderr, "Usage: %s <link> <ipv4>\n", argv[0]);
+    fprintf(stderr, "Usage: %s <link> <ipv4> <TCP port>\n", argv[0]);
 }
 
 // Parses CLI arguments.
@@ -147,7 +155,7 @@ static void _print_usage(char **argv)
 // Fails on a malformed command.
 static bool _parse_args(int argc, char **argv, args_t *args)
 {
-    if (argc != 3) {
+    if (argc != 4) {
         _print_usage(argv);
         return false;
     }
@@ -161,6 +169,8 @@ static bool _parse_args(int argc, char **argv, args_t *args)
         return false;
     }
     args->ipv4_addr = ipv4_addr_t::from_in_addr(in_addr);
+
+    args->tcp_port = atoi(argv[3]);
 
     return true;
 }

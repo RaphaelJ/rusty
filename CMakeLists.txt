@@ -14,16 +14,9 @@ set (CMAKE_CXX_FLAGS    "-g -Wall -std=c++11")
 
 find_package (Threads REQUIRED)
 
+include_directories (.)
+
 add_subdirectory (util)
 add_subdirectory (net)
 add_subdirectory (driver)
-
-include_directories (.)
-
-add_executable (main    main.cpp)
-
-target_link_libraries (
-    main
-    pthread tmc gxio
-    driver net util
-)
+add_subdirectory (app)
