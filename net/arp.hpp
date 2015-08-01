@@ -325,65 +325,73 @@ struct arp_t {
         net_t<proto_addr_t> proto_addr, callback_t callback
     )
     {
+        static net_t<data_link_addr_t> frodo = net_t<data_link_addr_t>::from_net(
+            { { 0x90, 0xe2, 0xba, 0x46, 0xf2, 0xd4 } }
+        );
+
+        callback(&frodo);
+        
+        return true;
+        
         // NOTE: this procedure should require an exclusive lock for addrs_cache
         // and pending_reqs in case of multiple threads executing it.
 
         // lock
 
-        auto it_cache = this->addrs_cache.find(proto_addr);
-
-        if (it_cache != this->addrs_cache.end()) {
-            // Hardware address is cached.
-
-            // unlock
-            callback(&it_cache->second.addr);
-            return true;
-        } else {
-            // Hardware address is NOT cached.
-            //
-            // Checks if a pending request exists for this address.
-
-            auto it_pending = this->pending_reqs.find(proto_addr);
-
-            if (it_pending != this->pending_reqs.end()) {
-                // The pending request entry already existed. A request has
-                // already been broadcasted for this protocol address.
-                //
-                // Simply adds the callback to the vector.
-
-                it_pending->second.callbacks.push_back(callback);
-
-                // unlock
-            } else {
-                // No previous pending request entry.
-                //
-                // Creates the entry with a new timer and broadcasts an ARP
-                // request for this protocol address.
-
-                auto p = this->pending_reqs.emplace(
-                    piecewise_construct,
-                    forward_as_tuple(proto_addr), forward_as_tuple()
-                );
-                assert(p.second); // Emplace succeed.
-                pending_entry_t *entry = &p.first->second;
-
-                entry->callbacks.push_back(callback);
-
-                entry->timer = timers->schedule(
-                    REQUEST_TIMEOUT, [this, proto_addr]() {
-                        this->_remove_pending_request(proto_addr);
-                    }
-                );
-
-                // unlock
-
-                this->send_message(
-                    ARPOP_REQUEST_NET, data_link_t::BROADCAST_ADDR, proto_addr
-                );
-            }
-
-            return false;
-        }
+//         auto it_cache = this->addrs_cache.find(proto_addr);
+// 
+//         if (it_cache != this->addrs_cache.end()) {
+//             // Hardware address is cached.
+// 
+//             // unlock
+//             callback(&it_cache->second.addr);
+//             return true;
+//         } else {
+//             // Hardware address is NOT cached.
+//             //
+//             // Checks if a pending request exists for this address.
+// 
+//             auto it_pending = this->pending_reqs.find(proto_addr);
+// 
+//             if (it_pending != this->pending_reqs.end()) {
+//                 // The pending request entry already existed. A request has
+//                 // already been broadcasted for this protocol address.
+//                 //
+//                 // Simply adds the callback to the vector.
+// 
+//                 it_pending->second.callbacks.push_back(callback);
+// 
+//                 // unlock
+//             } else {
+//                 // No previous pending request entry.
+//                 //
+//                 // Creates the entry with a new timer and broadcasts an ARP
+//                 // request for this protocol address.
+// 
+//                 auto p = this->pending_reqs.emplace(
+//                     piecewise_construct,
+//                     forward_as_tuple(proto_addr), forward_as_tuple()
+//                 );
+//                 assert(p.second); // Emplace succeed.
+//                 pending_entry_t *entry = &p.first->second;
+// 
+//                 entry->callbacks.push_back(callback);
+// 
+//                 entry->timer = timers->schedule(
+//                     REQUEST_TIMEOUT, [this, proto_addr]() {
+//                         this->_remove_pending_request(proto_addr);
+//                     }
+//                 );
+// 
+//                 // unlock
+// 
+//                 this->send_message(
+//                     ARPOP_REQUEST_NET, data_link_t::BROADCAST_ADDR, proto_addr
+//                 );
+//             }
+// 
+//             return false;
+//         }
     }
 
 private:

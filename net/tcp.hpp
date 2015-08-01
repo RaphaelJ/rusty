@@ -529,6 +529,13 @@ struct tcp_t {
                     wl2  = ack;
                 }
             }
+
+            // Returns 'true' if there is at least one sequence number ready to
+            // be used.
+            inline bool can_transmit(void) const
+            {
+                return next < end();
+            }
         } tx_window;
 
         //
@@ -701,6 +708,15 @@ struct tcp_t {
             return;                                                            \
         } while (0)
 
+    #define TCP_TCB_DEBUG(MSG, ...)                                            \
+        do {                                                                   \
+            TCP_DEBUG(                                                         \
+                "%s:%" PRIu16 " on local port %" PRIu16 ": " MSG,              \
+                network_t::addr_t::to_alpha(tcb_id.raddr), tcb_id.rport.host(), \
+                tcb_id.lport.host(), ##__VA_ARGS__                             \
+            );                                                                 \
+        } while (0)
+
     // Processes a TCP segment from the given network address. The segment must
     // start at the given cursor (network layer payload without headers).
     //
@@ -765,12 +781,6 @@ struct tcp_t {
             // Processes the TCP message.
             //
 
-            TCP_DEBUG(
-                "Receives a TCP segment from %s:%" PRIu16 " on port %" PRIu16,
-                network_t::addr_t::to_alpha(saddr), hdr->sport.host(),
-                hdr->dport.host()
-            );
-
             // Processes the segment with the handler corresponding to the
             // current state of the TCP connection.
             //
@@ -778,6 +788,9 @@ struct tcp_t {
             // is no TCB for them.
 
             tcb_id_t tcb_id = { saddr, hdr->sport, hdr->dport };
+
+            TCP_TCB_DEBUG("Segment received");
+
             auto tcb_it = this->tcbs.find(tcb_id);
 
             if (tcb_it == this->tcbs.end()) {
@@ -807,14 +820,8 @@ struct tcp_t {
         });
     }
 
-    #define TCP_DEBUG_STATE_CHANGE(from, to)                                   \
-        do {                                                                   \
-            TCP_DEBUG(                                                         \
-                "State change for %s:%" PRIu16 " on local port %" PRIu16 ": "  \
-                from " -> " to, network_t::addr_t::to_alpha(tcb_id.raddr),     \
-                tcb_id.rport.host(), tcb_id.lport.host()                       \
-            );                                                                 \
-        } while (0);
+    #define TCP_TCB_STATE_CHANGE(FROM, TO)                                     \
+        TCP_TCB_DEBUG("State changed (" FROM " -> " TO ")");
 
     //
     // Server sockets.
@@ -928,6 +935,13 @@ struct tcp_t {
                         writer(offset, cursor);
                     };
 
+                TCP_DEBUG(
+                    "Sends data segment "
+                    "(<SEQ=%u><ACK=%u><CTL=ACK><%zu bytes payload>)",
+                    tcb->tx_window.next.value, tcb->rx_window.next.value,
+                    payload_size
+                );
+
                 this->_send_ack_segment(
                     tcb_id.lport, tcb_id.raddr, tcb_id.rport, tcb,
                     tcb->tx_window.next, tcb->rx_window.next,
@@ -949,12 +963,12 @@ struct tcp_t {
 
         tcb_t *tcb = &tcb_it->second;
 
-        // Asserts that the connection has not been already closed by the
-        // application layer.
-        assert(tcb->in_state(
-            tcb_t::SYN_RECEIVED | tcb_t::SYN_SENT | tcb_t::ESTABLISHED |
-            tcb_t::CLOSE_WAIT
-        ));
+        // The connection has already been closed by the application layer.
+        if (tcb->in_state(
+            tcb_t::FIN_WAIT_1 | tcb_t::FIN_WAIT_2 | tcb_t::CLOSING |
+            tcb_t::TIME_WAIT | tcb_t ::LAST_ACK
+        ))
+            return;
 
         if (tcb->in_state(tcb_t::SYN_SENT)) {
             tcb->conn_handlers.close();
@@ -963,15 +977,32 @@ struct tcp_t {
 
         if (tcb->tx_queue_not_sent.empty()) {
             // Sends a FIN segment immediately.
+
+            TCP_DEBUG(
+                "Sends FIN/ACK segment (<SEQ=%u><ACK=%u><CTL=FIN,ACK>)",
+                tcb->tx_window.next.value, tcb->rx_window.next.value
+            );
+
             this->_send_fin_ack_segment(
                 tcb_id.lport, tcb_id.raddr, tcb_id.rport, tcb,
                 tcb->tx_window.next, tcb->rx_window.next
             );
+
+            tcb->rx_window.acked = tcb->rx_window.next;
+            ++tcb->tx_window.next; // Transmitted FIN control bit.
+        } else {
+            TCP_DEBUG("Next : %d Size: %d End : %d", tcb->tx_window.next.value, tcb->tx_window.size, tcb->tx_window.end().value);
+            assert(!tcb->tx_window.can_transmit());
         }
 
         switch (tcb->state) {
-        case tcb_t::SYN_RECEIVED: case tcb_t::ESTABLISHED:
+        case tcb_t::SYN_RECEIVED:
             tcb->state = tcb_t::FIN_WAIT_1;
+            TCP_TCB_STATE_CHANGE("SYN-RECEIVED", "FIN-WAIT-1");
+            break;
+        case tcb_t::ESTABLISHED:
+            tcb->state = tcb_t::FIN_WAIT_1;
+            TCP_TCB_STATE_CHANGE("ESTABLISHED", "FIN-WAIT-1");
             break;
         case tcb_t::CLOSE_WAIT:
             tcb->state = tcb_t::LAST_ACK;
@@ -1026,7 +1057,7 @@ private:
             // segment with a SYN-ACK segment. Notifies the application of the
             // new connection.
 
-            TCP_DEBUG_STATE_CHANGE("LISTEN", "SYN-RECEIVED");
+            TCP_TCB_STATE_CHANGE("LISTEN", "SYN-RECEIVED");
 
             //
             // Creates an initializes the TCB.
@@ -1064,6 +1095,8 @@ private:
             this->_send_syn_ack_segment(
                 hdr->dport, saddr, hdr->sport, tcb, iss, tcb->rx_window.next
             );
+
+            tcb->rx_window.acked = tcb->rx_window.next;
 
             //
             // Notifies the application.
@@ -1128,7 +1161,7 @@ private:
                 // Moves into the ESTABLISHED state and acknowledges the
                 // received SYN/ACK segment.
 
-                TCP_DEBUG_STATE_CHANGE("SYN-SENT", "ESTABLISHED");
+                TCP_TCB_STATE_CHANGE("SYN-SENT", "ESTABLISHED");
 
                 tcb->state = tcb_t::ESTABLISHED;
 
@@ -1149,9 +1182,11 @@ private:
 
                 // Acknowledges the received SYN segment and adds any pending
                 // data.
-                return this->_respond_with_ack_and_data_segment(
-                    saddr, hdr, tcb
-                );
+
+                this->_respond_with_data_segments(saddr, hdr, tcb);
+
+                if (tcb->rx_window.acked < tcb->rx_window.next)
+                    this->_respond_with_ack_segment(saddr, hdr, tcb);
             } else
                 IGNORE_SEGMENT("no SYN nor RST control bit");
         } else {
@@ -1168,7 +1203,7 @@ private:
                 // Moves into the SYN-RECEIVED state and acknowledges the
                 // segment by re-emiting a SYN-ACK segment.
 
-                TCP_DEBUG_STATE_CHANGE("SYN-SENT", "SYN-RECEIVED");
+                TCP_TCB_STATE_CHANGE("SYN-SENT", "SYN-RECEIVED");
 
                 tcb->state = tcb_t::SYN_RECEIVED;
 
@@ -1180,10 +1215,7 @@ private:
 
                 tcb->tx_window.init_from_syn(this, hdr, irs, options);
 
-                this->_send_syn_ack_segment(
-                    hdr->dport, saddr, hdr->sport, tcb,
-                    tcb->tx_window.next, tcb->rx_window.next
-                );
+                return this->_respond_with_ack_segment(saddr, hdr, tcb);
             } else
                 IGNORE_SEGMENT("no SYN nor RST control bit");
         }
@@ -1260,7 +1292,7 @@ private:
                 // Our SYN has been acknowledged, moves into the ESTABLISHED
                 // state.
 
-                TCP_DEBUG_STATE_CHANGE("SYN-RECEIVED", "ESTABLISHED");
+                TCP_TCB_STATE_CHANGE("SYN-RECEIVED", "ESTABLISHED");
                 tcb->state = tcb_t::ESTABLISHED;
             } else
                 return this->_respond_with_rst_segment(saddr, hdr, payload);
@@ -1304,7 +1336,7 @@ private:
                 && ack == tcb->tx_window.next
                 && tcb->tx_queue_not_sent.empty()
             ) {
-                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "FIN-WAIT-2");
+                TCP_TCB_STATE_CHANGE("FIN-WAIT-1", "FIN-WAIT-2");
                 tcb->state = tcb_t::FIN_WAIT_2;
             }
 
@@ -1312,7 +1344,7 @@ private:
             // the TIME-WAIT state, otherwise, ignore the segment.
             if (tcb->in_state(tcb_t::CLOSING)) {
                 if (ack == tcb->tx_window.next) {
-                    TCP_DEBUG_STATE_CHANGE("CLOSING", "TIME-WAIT");
+                    TCP_TCB_STATE_CHANGE("CLOSING", "TIME-WAIT");
                     tcb->state = tcb_t::TIME_WAIT;
                     this->_schedule_fin_timeout(tcb_id, tcb);
                 } else
@@ -1349,14 +1381,11 @@ private:
         //
 
         if (hdr->flags.fin) {
-            // TODO: notify the application layer that the connection is closing
-            // and returns an error value for any new call to receive().
-
             switch (tcb->state) {
             case tcb_t::ESTABLISHED:
                 ++tcb->rx_window.next;
 
-                TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSE-WAIT");
+                TCP_TCB_STATE_CHANGE("ESTABLISHED", "CLOSE-WAIT");
                 tcb->state = tcb_t::CLOSE_WAIT;
 
                 tcb->conn_handlers.remote_close();
@@ -1373,7 +1402,7 @@ private:
                     // otherwise we would already be in the FIN-WAIT-2 state.
 
                     assert(ack < tcb->tx_window.next);
-                    TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSING");
+                    TCP_TCB_STATE_CHANGE("FIN-WAIT-1", "CLOSING");
                     tcb->state = tcb_t::CLOSING;
                 } else {
                     // We are in the FIN-WAIT-1 state but we didn't send our FIN
@@ -1384,7 +1413,7 @@ private:
                     // received the FIN before the application layer asked to
                     // close the connection.
 
-                    TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "LAST-ACK");
+                    TCP_TCB_STATE_CHANGE("FIN-WAIT-1", "LAST-ACK");
                     tcb->state = tcb_t::LAST_ACK;
                 }
 
@@ -1392,7 +1421,9 @@ private:
                 tcb->conn_handlers.close();
                 break;
             case tcb_t::FIN_WAIT_2:
-                TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "TIME-WAIT");
+                ++tcb->rx_window.next;
+
+                TCP_TCB_STATE_CHANGE("FIN-WAIT-2", "TIME-WAIT");
                 tcb->state = tcb_t::TIME_WAIT;
 
                 this->_schedule_fin_timeout(tcb_id, tcb);
@@ -1413,21 +1444,28 @@ private:
         }
 
         //
-        // Acknowledges the received data and/or the FIN control bit.
+        // Transmits any pending data that could have become ready as the
+        // transmission window have been updated.
+        //
+        // Does this after checking for the FIN control bit so these segments
+        // can acknowledge its receipt.
         //
 
-        if (
-               tcb->rx_window.acked < tcb->rx_window.next
-            || !tcb->tx_queue_not_sent.empty()
-        ) {
-            if (tcb->in_state(
-                tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::CLOSE_WAIT |
-                tcb_t::LAST_ACK
-            ))
-                this->_respond_with_ack_and_data_segment(saddr, hdr, tcb);
-            else
-                this->_respond_with_ack_segment(saddr, hdr, tcb);
-        }
+        if (tcb->in_state(
+            tcb_t::ESTABLISHED | tcb_t::FIN_WAIT_1 | tcb_t::CLOSE_WAIT |
+            tcb_t::LAST_ACK
+        ))
+            this->_respond_with_data_segments(saddr, hdr, tcb);
+
+        //
+        // Acknowledges any received data and/or the FIN control bit.
+        //
+        // Checks that there is still something to acknowledge (data segments
+        // contains an acknowledgement number).
+        //
+
+        if (tcb->rx_window.acked < tcb->rx_window.next)
+            this->_respond_with_ack_segment(saddr, hdr, tcb);
     }
 
     #undef IGNORE_SEGMENT
@@ -1454,31 +1492,31 @@ private:
     {
         switch (tcb->state) {
         case tcb_t::SYN_SENT:
-            TCP_DEBUG_STATE_CHANGE("SYN-SENT", "CLOSED");
+            TCP_TCB_STATE_CHANGE("SYN-SENT", "CLOSED");
             break;
         case tcb_t::SYN_RECEIVED:
-            TCP_DEBUG_STATE_CHANGE("SYN-RECEIVED", "CLOSED");
+            TCP_TCB_STATE_CHANGE("SYN-RECEIVED", "CLOSED");
             break;
         case tcb_t::ESTABLISHED:
-            TCP_DEBUG_STATE_CHANGE("ESTABLISHED", "CLOSED");
+            TCP_TCB_STATE_CHANGE("ESTABLISHED", "CLOSED");
             break;
         case tcb_t::FIN_WAIT_1:
-            TCP_DEBUG_STATE_CHANGE("FIN-WAIT-1", "CLOSED");
+            TCP_TCB_STATE_CHANGE("FIN-WAIT-1", "CLOSED");
             break;
         case tcb_t::FIN_WAIT_2:
-            TCP_DEBUG_STATE_CHANGE("FIN-WAIT-2", "CLOSED");
+            TCP_TCB_STATE_CHANGE("FIN-WAIT-2", "CLOSED");
             break;
         case tcb_t::CLOSE_WAIT:
-            TCP_DEBUG_STATE_CHANGE("CLOSE-WAIT", "CLOSED");
+            TCP_TCB_STATE_CHANGE("CLOSE-WAIT", "CLOSED");
             break;
         case tcb_t::CLOSING:
-            TCP_DEBUG_STATE_CHANGE("CLOSING", "CLOSED");
+            TCP_TCB_STATE_CHANGE("CLOSING", "CLOSED");
             break;
         case tcb_t::LAST_ACK:
-            TCP_DEBUG_STATE_CHANGE("LAST-ACK", "CLOSED");
+            TCP_TCB_STATE_CHANGE("LAST-ACK", "CLOSED");
             break;
         case tcb_t::TIME_WAIT:
-            TCP_DEBUG_STATE_CHANGE("TIME-WAIT", "CLOSED");
+            TCP_TCB_STATE_CHANGE("TIME-WAIT", "CLOSED");
             break;
         };
 
@@ -1506,7 +1544,8 @@ private:
         this->_destroy_tcb(tcb_id, tcb);
     }
 
-    #undef TCP_DEBUG_STATE_CHANGE
+    #undef TCP_TCB_STATE_CHANGE
+    #undef TCP_TCB_DEBUG
 
     // -------------------------------------------------------------------------
     //
@@ -1770,6 +1809,11 @@ private:
         net_t<addr_t> saddr, const header_t *hdr, tcb_t *tcb
     )
     {
+        TCP_DEBUG(
+            "Responds with ACK segment (<SEQ=%u><ACK=%u><CTL=ACK>)",
+            tcb->tx_window.next.value, tcb->rx_window.next.value
+        );
+
         this->_send_ack_segment(
             hdr->dport, saddr, hdr->sport, tcb,
             tcb->tx_window.next, tcb->rx_window.next
@@ -1778,10 +1822,12 @@ private:
         tcb->rx_window.acked = tcb->rx_window.next;
     }
 
-    // Responds to the received segment by acknowledging the most recently
-    // received byte and by sending pending data (if any). The connection must
-    // be in a transmitting state (ESTABLISHED, FIN-WAIT-1, CLOSE-WAIT
-    // or LAST-ACK).
+    // Responds to the received segment by sending pending data (if any). Does
+    // nothing of the transmission queue is empty or if the transmission window
+    // has no free sequence number.
+    //
+    // The connection must be in a transmitting state (ESTABLISHED, FIN-WAIT-1,
+    // CLOSE-WAIT or LAST-ACK).
     //
     // Can sent multiple data segments if permitted by the transmission window
     // and will update the transmission window and transmission queue.
@@ -1792,7 +1838,7 @@ private:
     // Updates the 'acked' field of the received window.
     //
     // <SEQ=SND.NXT><ACK=RCV.NXT><CTL=ACK><payload>.
-    void _respond_with_ack_and_data_segment(
+    void _respond_with_data_segments(
         net_t<addr_t> saddr, const header_t *hdr, tcb_t *tcb
     )
     {
@@ -1801,11 +1847,13 @@ private:
             tcb_t::LAST_ACK
         ));
 
+        if (tcb->tx_queue_not_sent.empty())
+            return;
+
         // First sequence number that is outside of the transmission window.
         seq_t end_of_win = tcb->tx_window.end();
 
         // Sends one or more data segments.
-        int segments_sent = 0;
         while (end_of_win > tcb->tx_window.next) {
             // First sequence number that can't be send in this segment or
             // which is not in the current transmission window.
@@ -1909,6 +1957,13 @@ private:
                 // It's the last data segment we will send, we add a FIN
                 // control bit.
 
+                TCP_DEBUG(
+                    "Responds with FIN/ACK data segment "
+                    "(<SEQ=%u><ACK=%u><CTL=FIN,ACK><%zu bytes payload>)",
+                    tcb->tx_window.next.value, tcb->rx_window.next.value,
+                    payload_size
+                );
+
                 this->_send_fin_ack_segment(
                     hdr->dport, saddr, hdr->sport, tcb,
                     tcb->tx_window.next, tcb->rx_window.next,
@@ -1917,6 +1972,13 @@ private:
 
                 ++tcb->tx_window.next; // Transmitted FIN control bit.
             } else {
+                TCP_DEBUG(
+                    "Responds with data segment "
+                    "(<SEQ=%u><ACK=%u><CTL=ACK><%zu bytes payload>)",
+                    tcb->tx_window.next.value, tcb->rx_window.next.value,
+                    payload_size
+                );
+
                 this->_send_ack_segment(
                     hdr->dport, saddr, hdr->sport, tcb,
                     tcb->tx_window.next, tcb->rx_window.next,
@@ -1926,26 +1988,8 @@ private:
 
             // Updates the transmission windows.
             tcb->tx_window.next += (seq_t) payload_size;
-
-            ++segments_sent;
-        }
-
-        if (segments_sent < 1) {
-            // We must at least send one segment to acknowledge the received
-            // data.
-            this->_respond_with_ack_segment(saddr, hdr, tcb);
-        } else
             tcb->rx_window.acked = tcb->rx_window.next;
-    }
-
-    void _send_rst_segment(
-        net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
-        net_t<seq_t> seq, net_t<seq_t> ack
-    )
-    {
-        this->_send_segment(
-            sport, daddr, dport, seq, ack, _RST_ACK_FLAGS, 0, EMPTY_OPTIONS
-        );
+        }
     }
 
     // Responds to a received segment (and its payload) with a RST segment.
@@ -1976,10 +2020,20 @@ private:
             ack     = hdr->seq + hdr->flags.syn + hdr->flags.fin
                                + payload.size();
             flags   = _RST_ACK_FLAGS;
+
+            TCP_DEBUG(
+                "Responds with RST segment (<SEQ=0><ACK=%u><CTL=RST,ACK>)",
+                ack.host().value
+            );
         } else {
             seq     = hdr->ack;
             ack.net = 0;
             flags   = _RST_FLAGS;
+
+            TCP_DEBUG(
+                "Responds with RST segment (<SEQ=%u><CTL=RST>)",
+                seq.host().value
+            );
         }
 
         this->_send_segment(

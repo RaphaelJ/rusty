@@ -23,31 +23,19 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <cinttypes>
 
-#include <arpa/inet.h>      // inet_aton(), inet_ntoa()
-#include <net/ethernet.h>   // ether_addr
-#include <netinet/in.h>     // in_addr
-#include <netinet/ether.h>  // ether_ntoa()
-
-#include "driver/allocator.hpp"
-#include "driver/cpu.hpp"
-#include "driver/mpipe.hpp"
-#include "driver/timer.hpp"
-#include "net/arp.hpp"
-#include "net/endian.hpp"
-#include "net/ethernet.hpp"
-#include "net/ipv4.hpp"
-#include "util/macros.hpp"
+#include "driver/cpu.hpp"       // bind_to_dataplane()
+#include "driver/mpipe.hpp"     // mpipe_t
+#include "util/macros.hpp"      // TCP_MPIPE_DEBUG, COLOR_GRN
 
 using namespace std;
 
 using namespace tcp_mpipe::driver;
 using namespace tcp_mpipe::net;
 
-#define MAIN_COLOR     COLOR_GRN
-#define MAIN_DEBUG(MSG, ...)                                                   \
-    TCP_MPIPE_DEBUG("MAIN", MAIN_COLOR, MSG, ##__VA_ARGS__)
+#define ECHO_COLOR     COLOR_GRN
+#define ECHO_DEBUG(MSG, ...)                                                   \
+    TCP_MPIPE_DEBUG("ECHO", ECHO_COLOR, MSG, ##__VA_ARGS__)
 
 // Parsed CLI arguments.
 struct args_t {
@@ -58,7 +46,14 @@ struct args_t {
 
 static void _print_usage(char **argv);
 
+// Parses CLI arguments.
+//
+// Fails on a malformed command.
 static bool _parse_args(int argc, char **argv, args_t *args);
+
+static void _do_nothing(void)
+{
+}
 
 int main(int argc, char **argv)
 {
@@ -70,7 +65,7 @@ int main(int argc, char **argv)
 
     mpipe_t mpipe(args.link_name, args.ipv4_addr);
 
-    MAIN_DEBUG(
+    ECHO_DEBUG(
         "Starts the echo server on interface %s (%s) with %s as IPv4 address "
         "on port %d",
         args.link_name,
@@ -78,30 +73,25 @@ int main(int argc, char **argv)
         mpipe_t::ipv4_mpipe_t::addr_t::to_alpha(args.ipv4_addr), args.tcp_port
     );
 
-    // Tests the allocator.
-    tile_allocator_t<int> allocator();
-
-    function<void()> do_nothing = []() { };
-
     mpipe.data_link.ipv4.tcp.listen(
         args.tcp_port,
-        [tcp=&mpipe.data_link.ipv4.tcp, do_nothing]
+        [tcp=&mpipe.data_link.ipv4.tcp]
         (mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
-            MAIN_DEBUG(
+            ECHO_DEBUG(
                 "New connection from %s:%" PRIu16 " on port %" PRIu16,
                 mpipe_t::ipv4_mpipe_t::addr_t::to_alpha(tcb_id.raddr),
                 tcb_id.rport.host(), tcb_id.lport.host()
             );
 
             return (mpipe_t::tcp_mpipe_t::conn_handlers_t) {
-                [tcp, tcb_id, do_nothing](mpipe_t::cursor_t in)
+                [tcp, tcb_id](mpipe_t::cursor_t in)
                 {
                     size_t size = in.size();
 
                     in.read_with(
                         [size](const char *buffer)
                         {
-                            MAIN_DEBUG(
+                            ECHO_DEBUG(
                                 "Received %zu bytes: %.*s", size, (int) size,
                                 buffer
                             );
@@ -122,7 +112,7 @@ int main(int argc, char **argv)
                             );
                         },
 
-                        do_nothing
+                        _do_nothing
                     );
                 },
 
@@ -132,7 +122,7 @@ int main(int argc, char **argv)
                     tcp->close(tcb_id);
                 },
 
-                do_nothing, do_nothing
+                _do_nothing, _do_nothing
             };
         }
     );
@@ -150,9 +140,6 @@ static void _print_usage(char **argv)
     fprintf(stderr, "Usage: %s <link> <ipv4> <TCP port>\n", argv[0]);
 }
 
-// Parses CLI arguments.
-//
-// Fails on a malformed command.
 static bool _parse_args(int argc, char **argv, args_t *args)
 {
     if (argc != 4) {
@@ -175,5 +162,5 @@ static bool _parse_args(int argc, char **argv, args_t *args)
     return true;
 }
 
-#undef MAIN_COLOR
-#undef MAIN_DEBUG
+#undef ECHO_COLOR
+#undef ECHO_DEBUG

@@ -20,6 +20,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <errno.h>
 
 #include <tmc/cpus.h>       // tmc_cpus_*

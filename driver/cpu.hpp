@@ -18,6 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
+#include <cstdint>
+
 #ifndef __TCP_MPIPE_DRIVERS_CPU_HPP__
 #define __TCP_MPIPE_DRIVERS_CPU_HPP__
 

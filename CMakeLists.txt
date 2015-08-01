@@ -3,7 +3,8 @@ project (tcp-mpipe)
 # CFLAGS
 
 add_definitions(-DMPIPE_JUMBO_FRAMES)
-# add_definitions(-DNDEBUG)
+# add_definitions(-DMPIPE_CHAINED_BUFFERS)
+add_definitions(-DNDEBUG)
 
 # End of CFLAGS
 

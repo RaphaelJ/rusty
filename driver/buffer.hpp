@@ -397,32 +397,44 @@ struct cursor_t {
     template <typename R>
     inline R read_with(function<R(const char *, cursor_t)> f, size_t n) const
     {
-        if (can_in_place(n)) {
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (can_in_place(n)) {
+                const char *p;
+                cursor_t cursor = in_place(&p, n);
+                return f(p, cursor);
+            } else {
+                assert(can(n));
+                char data[n];
+                cursor_t cursor = read(data, n);
+                return f(data, cursor);
+            }
+        #else
             const char *p;
             cursor_t cursor = in_place(&p, n);
             return f(p, cursor);
-        } else {
-            assert(can(n));
-            char data[n];
-            cursor_t cursor = read(data, n);
-            return f(data, cursor);
-        }
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Equivalent to 'read_with<R>(f, sizeof (T))'.
     template <typename T, typename R>
     inline R read_with(function<R(const T *, cursor_t)> f) const
     {
-        if (can_in_place<T>()) {
+        #ifdef MPIPE_CHAINED_BUFFERS
+             if (can_in_place<T>()) {
+                const T *p;
+                cursor_t cursor = in_place<T>(&p);
+                return f(p, cursor);
+            } else {
+                assert(can<T>());
+                T data;
+                cursor_t cursor = read<T>(&data);
+                return f(&data, cursor);
+            }
+        #else
             const T *p;
             cursor_t cursor = in_place<T>(&p);
             return f(p, cursor);
-        } else {
-            assert(can<T>());
-            T data;
-            cursor_t cursor = read<T>(&data);
-            return f(&data, cursor);
-        }
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Gives a pointer to read 'n' bytes of data to the function.
@@ -463,34 +475,48 @@ struct cursor_t {
     // of bytes to write.
     inline cursor_t write_with(function<void(char *)> f, size_t n)
     {
-        if (can_in_place(n)) {
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (can_in_place(n)) {
+                char *p;
+                cursor_t cursor = in_place(&p, n);
+                f(p);
+                return cursor;
+            } else {
+                assert(can(n));
+                char data[n];
+                f(data);
+                return write(data, n);
+            }
+        #else
             char *p;
             cursor_t cursor = in_place(&p, n);
             f(p);
             return cursor;
-        } else {
-            assert(can(n));
-            char data[n];
-            f(data);
-            return write(data, n);
-        }
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Equivalent to 'write_with(f, sizeof (T))'.
     template <typename T>
     inline cursor_t write_with(function<void(T *)> f)
     {
-        if (can_in_place<T>()) {
+        #ifdef MPIPE_CHAINED_BUFFERS
+            if (can_in_place<T>()) {
+                T *p;
+                cursor_t cursor = in_place<T>(&p);
+                f(p);
+                return cursor;
+            } else {
+                assert(can<T>());
+                T data;
+                f(&data);
+                return write<T>(&data);
+            }
+        #else
             T *p;
             cursor_t cursor = in_place<T>(&p);
             f(p);
             return cursor;
-        } else {
-            assert(can<T>());
-            T data;
-            f(&data);
-            return write<T>(&data);
-        }
+        #endif /* MPIPE_CHAINED_BUFFERS */
     }
 
     // Executes the given function on each buffer, in order.
