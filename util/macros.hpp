@@ -69,6 +69,8 @@
 
 #ifdef NDEBUG
     #define TCP_MPIPE_DEBUG(MODULE, COLOR, MSG, ...)
+#elif NDEBUGMSG
+    #define TCP_MPIPE_DEBUG(MODULE, COLOR, MSG, ...)
 #else
     #define TCP_MPIPE_DEBUG(MODULE, COLOR, MSG, ...)                           \
         do {                                                                   \

@@ -48,15 +48,21 @@ namespace driver {
 // Paramaters.
 //
 
-// Number of packet descriptors in the ingress queue.
+// Number of buckets that the load balancer uses.
+//
+// Must be a power of 2 and must be be larger or equal to the number of workers.
+static const unsigned int N_BUCKETS         = 1024;
+
+// Number of packet descriptors in the ingress queues. There will be as must
+// iqueues as workers.
 //
 // Could be 128, 512, 2K or 64K.
-static const unsigned int IQUEUE_ENTRIES = GXIO_MPIPE_IQUEUE_ENTRY_512;
+static const unsigned int IQUEUE_ENTRIES    = GXIO_MPIPE_IQUEUE_ENTRY_512;
 
 // Number of packet descriptors in the egress queue.
 //
 // Could be 512, 2K, 8K or 64K.
-static const unsigned int EQUEUE_ENTRIES = GXIO_MPIPE_EQUEUE_ENTRY_2K;
+static const unsigned int EQUEUE_ENTRIES    = GXIO_MPIPE_EQUEUE_ENTRY_2K;
 
 // mPIPE buffer stacks.
 //
@@ -115,42 +121,86 @@ struct mpipe_t {
     // Member types
     //
 
-    // Cursor which will abstract how the upper (Ethernet) layer will read from
-    // and write to memory in mPIPE buffers.
-    typedef buffer::cursor_t                    cursor_t;
-
-    typedef timer::timer_manager_t              timer_manager_t;
-
-    // Upper network layers types.
-    typedef ethernet_t<mpipe_t>                 ethernet_mpipe_t;
-    typedef ethernet_mpipe_t::ipv4_ethernet_t   ipv4_mpipe_t;
-    typedef ipv4_mpipe_t::tcp_ipv4_t            tcp_mpipe_t;
-
+    // Each worker thread will be given an mPIPE instance.
     //
-    // Fields
+    // Each instance contains its own ingress queue. A unique egress queue is
+    // however shared between all threads.
+    struct instance_t {
+        //
+        // Member types
+        //
+
+        // Cursor which will abstract how the upper (Ethernet) layer will read
+        // from and write to memory in mPIPE buffers.
+        typedef buffer::cursor_t                        cursor_t;
+
+        typedef timer::timer_manager_t                  timer_manager_t;
+
+        //
+        // Fields
+        //
+
+        mpipe_t                     *parent;
+        pthread_t                   thread;
+
+        // Dataplane Tile dedicated to the execution of this worker.
+        int                         cpu_id;
+
+        // Ingres queue.
+        gxio_mpipe_iqueue_t         iqueue;
+        char                        *notif_ring_mem;
+
+        // Upper Ethernet data-link layer.
+        net::ethernet_t<instance_t> ethernet;
+
+        timer_manager_t             timers;
+
+        //
+        // Methods
+        //
+
+        // Starts an infite polling loop on the ingress queue.
+        //
+        // Forwards any received packet to the upper (Ethernet) data-link layer.
+        void run(void);
+
+        // Sends a packet of the given size on the interface by calling the
+        // 'packet_writer' with a cursor corresponding to a buffer allocated
+        // memory.
+        void send_packet(
+            size_t packet_size, function<void(cursor_t)> packet_writer
+        );
+
+        // Maximum packet size. Doesn't change after initialization.
+        inline size_t max_packet_size(void);
+
+        //
+        // Static methods
+        //
+
+        // Returns the current TCP sequence number.
+        static inline
+        net::ethernet_t<instance_t>::ipv4_ethernet_t::tcp_ipv4_t::seq_t
+        get_current_tcp_seq(void);
+
+    private:
+        // Allocates a buffer from the smallest stack able to hold the requested
+        // size.
+        gxio_mpipe_bdesc_t _alloc_buffer(size_t size);
+    };
+
+    typedef buffer::cursor_t                        cursor_t;
+
+    // Aliases for upper network layer types.
     //
+    // This permits the user to refer to network layer types easily, (i.e.
+    // 'mpipe_t::ipv4_t::addr_t' to refer to an IPv4 address).
 
-    // Driver
-    gxio_mpipe_context_t    context;
-    gxio_mpipe_link_t       link;
+    typedef net::ethernet_t<instance_t>             ethernet_t;
+    typedef mpipe_t::ethernet_t::ipv4_ethernet_t    ipv4_t;
+    typedef mpipe_t::ipv4_t::tcp_ipv4_t             tcp_t;
 
-    // Ingres
-    gxio_mpipe_iqueue_t     iqueue;
-    unsigned int            notif_ring_id;
-    char                    *notif_ring_mem;
-
-    unsigned int            notif_group_id;
-    unsigned int            bucket_id;
-
-    // Egress
-    gxio_mpipe_equeue_t     equeue;
-    unsigned int            edma_ring_id;
-    char                    *edma_ring_mem;
-
-    // Maximum packet size. Doesn't change after intialization.
-    size_t                  max_packet_size;
-
-    // Buffers and their stacks. Stacks are sorted by increasing buffer sizes.
+    // Allocated resources for a buffer stack.
     struct buffer_stack_t {
         const buffer_stack_info_t   *info;
         unsigned int                id;
@@ -166,15 +216,43 @@ struct mpipe_t {
         // Number of bytes allocated for the buffer stack and its buffers.
         size_t                      mem_size;
     };
-    vector<buffer_stack_t>  buffer_stacks;
+
+    //
+    // Fields
+    //
+
+    // Driver
+    gxio_mpipe_context_t        context;
+    gxio_mpipe_link_t           link;
+
+    // Workers instances
+    vector<instance_t>          instances;
+
+    // Ingres queues
+    unsigned int                notif_group_id; // Load balancer group.
+    unsigned int                first_bucket_id;
+
+    // Egress queue
+    gxio_mpipe_equeue_t         equeue;
+    unsigned int                edma_ring_id;
+    char                        *edma_ring_mem;
+
+    // Buffers and their stacks. Stacks are sorted by increasing buffer sizes.
+    vector<buffer_stack_t>      buffer_stacks;
 
     // Rules
-    gxio_mpipe_rules_t      rules;
+    gxio_mpipe_rules_t          rules;
 
-    timer_manager_t         timers;
+    // Equals to 'true' while the 'run()' method is running.
+    //
+    // Setting this field to false will stop the execution of the 'run()'
+    // method.
+    bool                        is_running = false;
 
-    // Upper (Ethernet) data-link layer.
-    ethernet_mpipe_t        data_link;
+    net_t<ethernet_t::addr_t>   ether_addr;
+
+    // Maximum packet size. Doesn't change after initialization.
+    size_t                      max_packet_size;
 
     // -------------------------------------------------------------------------
 
@@ -184,15 +262,49 @@ struct mpipe_t {
 
     // Initializes the given mpipe_env_t for the given link.
     //
-    // Starts the mPIPE driver, allocates a NotifRing and its iqueue wrapper, an
-    // eDMA ring with its equeue wrapper and a set of buffer stacks with their
-    // buffers.
-    mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr);
+    // Starts the mPIPE driver, allocates NotifRings and their iqueue wrappers,
+    // an eDMA ring with its equeue wrapper and a set of buffer stacks with
+    // their buffers.
+    mpipe_t(
+        const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers
+    );
 
-    // Starts an infite polling loop on the ingress queue.
+    // Releases mPIPE resources referenced by current mPIPE environment.
+    ~mpipe_t(void);
+
+    // Starts the workers and process any received packet.
     //
-    // Forwards any received packet to the upper (Ethernet) data-link layer.
+    // This function doesn't return until a call to 'stop()' is made.
     void run(void);
+
+    // Stops the execution of 'run()'. This method just sets 'is_running' to
+    // 'false'.
+    void stop(void);
+
+    //
+    // TCP server sockets.
+    //
+
+    // Starts listening for TCP connections on the given port.
+    //
+    // If the port was already in the listen state, replaces the previous
+    // callback function.
+    //
+    // FIXME: the function is not thread safe. DON'T call it when workers are
+    // concurrently running.
+    void tcp_listen(
+        tcp_t::port_t tcp, tcp_t::new_conn_callback_t new_conn_callback
+    );
+
+    //
+    // TCP client/connected sockets.
+    //
+
+
+private:
+    // Allocates a buffer from the smallest stack able to hold the requested
+    // size.
+    gxio_mpipe_bdesc_t _alloc_buffer(size_t size);
 
     // Sends a packet of the given size on the interface by calling the
     // 'packet_writer' with a cursor corresponding to a buffer allocated
@@ -200,32 +312,21 @@ struct mpipe_t {
     void send_packet(
         size_t packet_size, function<void(cursor_t)> packet_writer
     );
-
-    // Releases mPIPE resources referenced by current mPIPE environment.
-    //
-    // You must not expect the 'mpipe_t' destructor to call 'close()'.
-    // You should always call 'close()' when you're done with mPIPE resources.
-    void close(void);
-
-    //
-    // Static methods
-    //
-
-    // Returns the current TCP sequence number.
-    static inline tcp_mpipe_t::seq_t get_current_tcp_seq()
-    {
-        // Number of cycles between two increments of the sequence number
-        // (~ 4 µs).
-        static const cycles_t DELAY = CYCLES_PER_SECOND * 4 / 1000000;
-
-        return tcp_mpipe_t::seq_t((uint32_t) get_cycle_count() / DELAY);
-    }
-
-private:
-    // Allocates a buffer from the smallest stack able to hold the requested
-    // size.
-    gxio_mpipe_bdesc_t _alloc_buffer(size_t size);
 };
+
+inline size_t mpipe_t::instance_t::max_packet_size(void)
+{
+    return this->parent->max_packet_size;
+}
+
+inline mpipe_t::tcp_t::seq_t mpipe_t::instance_t::get_current_tcp_seq(void)
+{
+    // Number of cycles between two increments of the sequence number
+    // (~ 4 µs).
+    static const cycles_t DELAY = CYCLES_PER_SECOND * 4 / 1000000;
+
+    return mpipe_t::tcp_t::seq_t((uint32_t) get_cycle_count() / DELAY);
+}
 
 } } /* namespace tcp_mpipe::driver */
 

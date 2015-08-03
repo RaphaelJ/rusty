@@ -293,7 +293,7 @@ private:
 
     size_t _max_payload_size(void)
     {
-        return this->phys->max_packet_size - HEADER_SIZE;
+        return this->phys->max_packet_size() - HEADER_SIZE;
     }
 };
 

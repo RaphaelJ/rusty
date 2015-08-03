@@ -3,15 +3,18 @@ project (tcp-mpipe)
 # CFLAGS
 
 add_definitions(-DMPIPE_JUMBO_FRAMES)
+
 # add_definitions(-DMPIPE_CHAINED_BUFFERS)
-add_definitions(-DNDEBUG)
+
+# add_definitions(-DNDEBUG) # Disable debug messages and assertions.
+add_definitions(-DNDEBUGMSG) # Disable debug messages.
 
 # End of CFLAGS
 
 cmake_minimum_required (VERSION 2.8)
 
-set (CMAKE_CC_FLAGS     "-g -Wall -std=c99")
-set (CMAKE_CXX_FLAGS    "-g -Wall -std=c++11")
+set (CMAKE_CC_FLAGS     "-g -Wall -std=c99 -O2")
+set (CMAKE_CXX_FLAGS    "-g -Wall -std=c++11 -O2")
 
 find_package (Threads REQUIRED)
 

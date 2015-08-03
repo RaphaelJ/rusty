@@ -287,8 +287,57 @@ struct tcp_t {
         }
     };
 
-    // Uniquely identifies a TCP Control Block or a connection.
+    // Uniquely identifies a TCP Control Block.
     typedef tcp_tcb_id_t<addr_t, port_t>        tcb_id_t;
+
+    // Function given to 'conn_t::send()' which writes data into a transmission
+    // buffer.
+    //
+    // The first function argument gives the data offset at which the
+    // transmission buffer starts.
+    //
+    // The number of bytes to write is given by the cursor size. The function
+    // could be called an undefined number of times, with different offsets,
+    // because of packet segmentation and retransmission.
+    typedef function<void(size_t, cursor_t)>    writer_t;
+
+    // Callback given to 'send()' which will be called once all the data
+    // provided by the writer has been acked by the remote.
+    typedef function<void()>                    acked_callback_t;
+
+    // Datatype used by the application layer to control the connection.
+    struct conn_t {
+        tcp_t       *tcp_instance;
+        tcb_id_t    tcb_id;
+
+        // Returns 'true' if the the connection is in a state where data can be
+        // sent using 'send()' (i.e. the 'close()' method has not been called
+        // for this connection).
+        inline bool can_send(void)
+        {
+            return tcp_instance->_can_send(tcb_id);
+        }
+
+        // Sends data to the remote TCP instance.
+        //
+        // The user must provides two function, one which will be called to
+        // write the data into the network buffers, and one which will be called
+        // once the data have been acknowledged by the remote TCP.
+        inline void send(size_t length, writer_t writer, acked_callback_t acked)
+        {
+            tcp_instance->_send(tcb_id, length, writer, acked);
+        }
+
+        // Closes the TCP connection.
+        //
+        // Once called, no more data could be sent to the remote TCP using
+        // 'send()'. However, data could still be received up until the
+        // 'conn_handlers_t::remote_close()' event have been triggered.
+        inline void close(void)
+        {
+            tcp_instance->_close(tcb_id);
+        }
+    };
 
     // Set of functions provided by the application layer to handle events of
     // a connection.
@@ -318,22 +367,7 @@ struct tcp_t {
     // Callback called on new connections on a port open in the LISTEN state.
     //
     // The function is given the identifier of the new established connection.
-    typedef function<conn_handlers_t(tcb_id_t)> new_conn_callback_t;
-
-
-    // Function given to 'send()' which writes data into a transmission buffer.
-    //
-    // The first function argument gives the data offset at which the
-    // transmission buffer starts.
-    //
-    // The number of bytes to write is given by the cursor size. The function
-    // could be called an undefined number of times, with different offsets,
-    // because of packet segmentation and retransmission.
-    typedef function<void(size_t, cursor_t)>    writer_t;
-
-    // Callback given to 'send()' which will be called once all the data
-    // provided by the writer has been acked by the remote.
-    typedef function<void()>                    acked_callback_t;
+    typedef function<conn_handlers_t(conn_t)> new_conn_callback_t;
 
     // TCP Control Block.
     //
@@ -515,6 +549,20 @@ struct tcp_t {
                 return unack + (seq_t) size;
             }
 
+            // Returns the number of bytes sequence numbers that are ready to
+            // be used.
+            inline size_t ready()
+            {
+                return (end() - next).value;
+            }
+
+            // Returns 'true' if there is at least one sequence number ready to
+            // be used.
+            inline bool can_transmit(void) const
+            {
+                return next < end();
+            }
+
             // Updates the sender window size and the values of 'wl1' and 'wl2'
             // if 'wl1 < seq || (wl1 == seq && wl2 <= ack)' (this prevents old
             // segments to update the window).
@@ -528,13 +576,6 @@ struct tcp_t {
                     wl1  = seq;
                     wl2  = ack;
                 }
-            }
-
-            // Returns 'true' if there is at least one sequence number ready to
-            // be used.
-            inline bool can_transmit(void) const
-            {
-                return next < end();
             }
         } tx_window;
 
@@ -635,7 +676,8 @@ struct tcp_t {
 
     // Delay in which a connection stays in the TIME-WAIT state before being
     // removed ("2MSL" timeout).
-    static constexpr delay_t    FIN_TIMEOUT = 60000000; // 60 sec.
+    // static constexpr delay_t    FIN_TIMEOUT = 60000000; // 60 sec.
+    static constexpr delay_t    FIN_TIMEOUT = 0; // Disabled.
 
     // Maximum number of out of order segments which will be retained before
     // starting to drop them.
@@ -843,31 +885,45 @@ struct tcp_t {
         );
     }
 
+private:
+
     //
-    // Client sockets.
+    // Connected sockets.
+    //
+    // These methods are called by 'conn_t' methods.
     //
 
-    // Sends data to the remote TCP instance.
-    //
-    // The user must provides two function, one which will be called to write
-    // the data into the network buffers, and one which will be called once the
-    // will be acknowledged by the remote TCP.
-    void send(
-        tcb_id_t tcb_id, size_t length, writer_t writer,
-        acked_callback_t acked_callback
-    )
+    // Returns 'true' if the the connection is in a state where data can be
+    // sent using 'send()' (i.e. the 'close()' method has not been called
+    // for this connection).
+    inline bool _can_send(tcb_id_t tcb_id)
     {
         auto tcb_it = this->tcbs.find(tcb_id);
         assert(tcb_it != this->tcbs.end());
 
         tcb_t *tcb = &tcb_it->second;
 
-        // Asserts that the connection has not been already closed by the
-        // application layer.
-        assert(tcb->in_state(
+        return tcb->in_state(
             tcb_t::SYN_RECEIVED | tcb_t::SYN_SENT | tcb_t::ESTABLISHED |
             tcb_t::CLOSE_WAIT
-        ));
+        );
+    }
+
+    // Sends data to the remote TCP instance.
+    //
+    // See 'conn_t::send()'.
+    void _send(
+        tcb_id_t tcb_id, size_t length, writer_t writer,
+        acked_callback_t acked_callback
+    )
+    {
+        // The connection has not been already closed by the application layer.
+        assert(this->_can_send(tcb_id));
+
+        auto tcb_it = this->tcbs.find(tcb_id);
+        assert(tcb_it != this->tcbs.end());
+
+        tcb_t *tcb = &tcb_it->second;
 
         if (length <= 0)
             return;
@@ -929,6 +985,9 @@ struct tcp_t {
                 size_t payload_size = (end_of_seg - tcb->tx_window.next).value,
                        offset       = (tcb->tx_window.next - entry.begin).value;
 
+                assert(payload_size <= tcb->tx_window.mss);
+                assert(payload_size <= tcb->tx_window.ready());
+
                 function<void(cursor_t)> payload_writer =
                     [writer, offset](cursor_t cursor)
                     {
@@ -956,7 +1015,9 @@ struct tcp_t {
     }
 
     // Closes the TCP connection.
-    void close(tcb_id_t tcb_id)
+    //
+    // See 'conn_t::close()'.
+    void _close(tcb_id_t tcb_id)
     {
         auto tcb_it = this->tcbs.find(tcb_id);
         assert(tcb_it != this->tcbs.end());
@@ -990,10 +1051,8 @@ struct tcp_t {
 
             tcb->rx_window.acked = tcb->rx_window.next;
             ++tcb->tx_window.next; // Transmitted FIN control bit.
-        } else {
-            TCP_DEBUG("Next : %d Size: %d End : %d", tcb->tx_window.next.value, tcb->tx_window.size, tcb->tx_window.end().value);
+        } else
             assert(!tcb->tx_window.can_transmit());
-        }
 
         switch (tcb->state) {
         case tcb_t::SYN_RECEIVED:
@@ -1013,7 +1072,7 @@ struct tcp_t {
         };
     }
 
-private:
+    // -------------------------------------------------------------------------
 
     // Common flags
     static const flags_t _SYN_FLAGS;        // <CTL=SYN>
@@ -1105,7 +1164,8 @@ private:
             // Copies the callback before calling it as it could be removed
             // while being called.
             new_conn_callback_t callback = *new_conn_callback;
-            conn_handlers_t conn_handlers = callback(tcb_id);
+            conn_t conn = { this, tcb_id };
+            conn_handlers_t conn_handlers = callback(conn);
 
             // As the new connection callback could have initiated a new
             // connection, and subsequently modified the 'tcbs' map, the 'tcb'
@@ -1924,6 +1984,9 @@ private:
                 }
             }
 
+            assert(payload_size <= tcb->tx_window.mss);
+            assert(payload_size <= tcb->tx_window.ready());
+
             // Creates a function which writes the content of multiple
             // application level writers into a single network buffer.
             function<void(cursor_t)> payload_writer =
@@ -2059,6 +2122,9 @@ private:
             network_t::tcp_pseudo_header_sum(
                 saddr, daddr, net_t<seg_size_t>(seg_size)
             );
+
+        if (seg_size > 1500)
+                TCP_ERROR("Size %zu", payload_size);
 
         this->network->send_tcp_payload(
         daddr, seg_size,

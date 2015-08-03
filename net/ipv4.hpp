@@ -393,11 +393,11 @@ struct ipv4_t {
         static constexpr size_t PSEUDO_HEADER_SIZE = 12;
         char buffer[PSEUDO_HEADER_SIZE];
 
-        *((net_t<addr_t> *) &buffer[0])                           = saddr;
-        *((net_t<addr_t> *) &buffer[4])                           = daddr;
-        buffer[8]                                                 = 0;
-        buffer[9]                                                 = IPPROTO_TCP;
-        *((net_t<typename tcp_ipv4_t::seg_size_t> *) &buffer[10]) = seg_size;
+        mempcpy(&buffer[0], &saddr, sizeof saddr);
+        mempcpy(&buffer[4], &daddr, sizeof daddr);
+        buffer[8] = 0;
+        buffer[9] = IPPROTO_TCP;
+        mempcpy(&buffer[10], &seg_size, sizeof seg_size);
 
         return partial_sum_t(buffer, PSEUDO_HEADER_SIZE);
     }

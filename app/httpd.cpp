@@ -1,10 +1,10 @@
 //
-// Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
-// University of Liege.
-//
-// Very simple HTTP server. Preload files in the given directory.
+// Very simple HTTP server. Preload files from the given directory.
 //
 // Usage: ./app/httpd <link> <ipv4> <TCP port> <root dir>
+//
+// Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
+// University of Liege.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -49,12 +49,13 @@ using namespace tcp_mpipe::net;
 // Parsed CLI arguments.
 struct args_t {
     char                            *link_name;
-    net_t<ipv4_addr_t>              ipv4_addr;
-    mpipe_t::tcp_mpipe_t::port_t    tcp_port;
+    net_t<mpipe_t::ipv4_t::addr_t>  ipv4_addr;
+    mpipe_t::tcp_t::port_t          tcp_port;
     char                            *root_dir;
+    size_t                          n_workers;
 };
 
-// Type used to index file by their filename. Differents from 'std::string', so
+// Type used to index file by their filename. Different from 'std::string', so
 // we can initialize it without having to reallocate and copy the string.
 struct filename_t {
     const char                      *value;
@@ -114,25 +115,18 @@ static void _do_nothing(void);
 
 // Interprets an HTTP request and serves the requested content.
 static void _on_received_data(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id,
-    unordered_map<filename_t, file_t> *files, mpipe_t::cursor_t in
+    unordered_map<filename_t, file_t> *files, mpipe_t::tcp_t::conn_t conn,
+    mpipe_t::cursor_t in
 );
 
 // Responds to the client with a 200 OK HTTP response containing the given file.
-void _respond_with_200(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id,
-    const file_t *file
-);
+void _respond_with_200(mpipe_t::tcp_t::conn_t conn, const file_t *file);
 
 // Responds to the client with a 400 Bad Request HTTP response.
-void _respond_with_400(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id
-);
+void _respond_with_400(mpipe_t::tcp_t::conn_t conn);
 
 // Responds to the client with a 404 Not Found HTTP response.
-void _respond_with_404(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id
-);
+void _respond_with_404(mpipe_t::tcp_t::conn_t conn);
 
 int main(int argc, char **argv)
 {
@@ -142,7 +136,7 @@ int main(int argc, char **argv)
 
     cpu::bind_to_dataplane(0);
 
-    mpipe_t mpipe(args.link_name, args.ipv4_addr);
+    mpipe_t mpipe(args.link_name, args.ipv4_addr, args.n_workers);
 
     unordered_map<filename_t, file_t> files { };
     _preload_files(&files, args.root_dir);
@@ -151,56 +145,64 @@ int main(int argc, char **argv)
         "Starts the HTTP server on interface %s (%s) with %s as IPv4 address "
         "on port %d serving %s",
         args.link_name,
-        mpipe_t::ethernet_mpipe_t::addr_t::to_alpha(mpipe.data_link.addr),
-        mpipe_t::ipv4_mpipe_t::addr_t::to_alpha(args.ipv4_addr), args.tcp_port,
+        mpipe_t::ethernet_t::addr_t::to_alpha(mpipe.ether_addr),
+        mpipe_t::ipv4_t::addr_t::to_alpha(args.ipv4_addr), args.tcp_port,
         args.root_dir
     );
 
-    mpipe.data_link.ipv4.tcp.listen(
+    mpipe.tcp_listen(
         args.tcp_port,
 
         // On new connections.
-        [tcp=&mpipe.data_link.ipv4.tcp, &files]
-        (mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id) {
+        [&files] (mpipe_t::tcp_t::conn_t conn)
+        {
             HTTPD_DEBUG(
                 "New connection from %s:%" PRIu16 " on port %" PRIu16,
-                mpipe_t::ipv4_mpipe_t::addr_t::to_alpha(tcb_id.raddr),
-                tcb_id.rport.host(), tcb_id.lport.host()
+                mpipe_t::ipv4_t::addr_t::to_alpha(conn.tcb_id.raddr),
+                conn.tcb_id.rport.host(), conn.tcb_id.lport.host()
             );
 
-            return (mpipe_t::tcp_mpipe_t::conn_handlers_t) {
-                [tcp, tcb_id, &files](mpipe_t::cursor_t in)
-                {
-                    _on_received_data(tcp, tcb_id, &files, in);
-                },
+            mpipe_t::tcp_t::conn_handlers_t handlers;
 
-                [tcp, tcb_id]()
+            handlers.new_data =
+                [&files, conn](mpipe_t::cursor_t in) mutable
+                {
+                    if (conn.can_send())
+                        _on_received_data(&files, conn, in);
+                };
+
+            handlers.remote_close =
+                [conn]() mutable
                 {
                     // Closes when the remote closes the connection.
-//                     tcp->close(tcb_id);
-                },
+                    conn.close();
+                };
 
-                _do_nothing, _do_nothing
-            };
+            handlers.close = _do_nothing;
+
+            handlers.reset = _do_nothing;
+
+            return handlers;
         }
     );
 
     // Runs the application.
     mpipe.run();
 
-    mpipe.close();
-
     return EXIT_SUCCESS;
 }
 
 static void _print_usage(char **argv)
 {
-    fprintf(stderr, "Usage: %s <link> <ipv4> <TCP port> <root dir>\n", argv[0]);
+    fprintf(
+        stderr, "Usage: %s <link> <ipv4> <TCP port> <root dir> <n workers>\n",
+        argv[0]
+    );
 }
 
 static bool _parse_args(int argc, char **argv, args_t *args)
 {
-    if (argc != 5) {
+    if (argc != 6) {
         _print_usage(argv);
         return false;
     }
@@ -218,6 +220,8 @@ static bool _parse_args(int argc, char **argv, args_t *args)
     args->tcp_port = atoi(argv[3]);
 
     args->root_dir = argv[4];
+
+    args->n_workers = atoi(argv[5]);
 
     return true;
 }
@@ -284,8 +288,8 @@ static void _do_nothing(void)
 }
 
 static void _on_received_data(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id,
-    unordered_map<filename_t, file_t> *files, mpipe_t::cursor_t in
+    unordered_map<filename_t, file_t> *files, mpipe_t::tcp_t::conn_t conn,
+    mpipe_t::cursor_t in
 )
 {
     // Expects that the first received segment contains the entire request.
@@ -295,8 +299,8 @@ static void _on_received_data(
     #define BAD_REQUEST(WHY, ...)                                              \
         do {                                                                   \
             HTTPD_ERROR("400 Bad Request (" WHY ")", ##__VA_ARGS__);           \
-            _respond_with_400(tcp, tcb_id);                                    \
-            tcp->close(tcb_id);                                                \
+            _respond_with_400(conn);                                           \
+            conn.close();                                                      \
             return;                                                            \
         } while (0)
 
@@ -304,7 +308,7 @@ static void _on_received_data(
         BAD_REQUEST("Not enough received data for the HTTP header");
 
     in.read_with(
-        [tcp, tcb_id, files](const char *buffer)
+        [files, conn](const char *buffer) mutable
         {
             //
             // Extracts the filename from the HTTP header
@@ -331,7 +335,9 @@ static void _on_received_data(
 
             size_t  path_len    = (intptr_t) path_end - (intptr_t) path_begin;
             char    *path       = (char *) alloca(path_len);
+
             strncpy(path, path_begin, path_len);
+            path[path_len] = '\0';
 
             //
             // Responds to the request.
@@ -341,23 +347,20 @@ static void _on_received_data(
 
             if (LIKELY(file_it != files->end())) {
                 HTTPD_DEBUG("200 OK - \"%s\"", path);
-                _respond_with_200(tcp, tcb_id, &file_it->second);
+                _respond_with_200(conn, &file_it->second);
             } else {
-                HTTPD_DEBUG("404 Not Found - \"%s\"", path);
-                _respond_with_404(tcp, tcb_id);
+                HTTPD_ERROR("404 Not Found - \"%s\"", path);
+                _respond_with_404(conn);
             }
 
-            tcp->close(tcb_id);
+            conn.close();
         }, size
     );
 
     #undef BAD_REQUEST
 }
 
-void _respond_with_200(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id,
-    const file_t *file
-)
+void _respond_with_200(mpipe_t::tcp_t::conn_t conn, const file_t *file)
 {
     constexpr char header[]     = "HTTP/1.1 200 OK\r\n"
                                   "Content-Type: text/html\r\n"
@@ -370,8 +373,8 @@ void _respond_with_200(
 
     size_t total_len = header_len + file->content_len;
 
-    tcp->send(
-        tcb_id, total_len,
+    conn.send(
+        total_len,
         [file](size_t offset, mpipe_t::cursor_t out)
         {
             size_t content_offset;
@@ -396,7 +399,8 @@ void _respond_with_200(
                 out.write(file->content + content_offset, out_size);
             }
         },
-        _do_nothing /* Does nothing on ACK */
+
+        _do_nothing // Does nothing on acknowledgment.
     );
 }
 
@@ -404,8 +408,8 @@ void _respond_with_200(
     do {                                                                       \
         constexpr char status[] = CONTENT;                                     \
                                                                                \
-        tcp->send(                                                             \
-            tcb_id, sizeof (status) - 1,                                       \
+        conn.send(                                                             \
+            sizeof (status) - 1,                                               \
             [](size_t offset, mpipe_t::cursor_t out)                           \
             {                                                                  \
                 out.write(status + offset, out.size());                        \
@@ -413,18 +417,14 @@ void _respond_with_200(
         );                                                                     \
     } while (0);
 
-void _respond_with_400(
-    mpipe_t::tcp_mpipe_t*tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id
-)
+void _respond_with_400(mpipe_t::tcp_t::conn_t conn)
 {
     RESPOND_WITH_CONTENT("HTTP/1.1 400 Bad Request\r\n\r\n");
 }
 
-void _respond_with_404(
-    mpipe_t::tcp_mpipe_t *tcp, mpipe_t::tcp_mpipe_t::tcb_id_t tcb_id
-)
+void _respond_with_404(mpipe_t::tcp_t::conn_t conn)
 {
-    RESPOND_WITH_CONTENT("HTTP/1.1 400 Bad Request\r\n\r\n");
+    RESPOND_WITH_CONTENT("HTTP/1.1 404 Not Found\r\n\r\n");
 }
 
 #undef RESPOND_WITH_CONTENT

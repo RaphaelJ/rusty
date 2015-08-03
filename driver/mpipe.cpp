@@ -21,7 +21,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#include <algorithm>
+#include <algorithm>            // sort()
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -31,8 +31,10 @@
 
 #include <gxio/mpipe.h>         // gxio_mpipe_*
 #include <net/ethernet.h>       // struct ether_addr
+#include <pthread.h>            // pthread_*
 #include <tmc/alloc.h>          // tmc_alloc_map(), tmc_alloc_set_home(),
                                 // tmc_alloc_set_pagesize().
+#include <tmc/cpus.h>           // tmc_cpus_*
 
 #include "driver/driver.hpp"    // VERIFY_ERRNO, VERIFY_GXIO
 #include "driver/buffer.hpp"    // cursor_t
@@ -50,22 +52,97 @@ namespace driver {
 
 // Returns the hardware address of the link related to the given mPIPE
 // environment (in network byte order).
-static net_t<ethernet_t<mpipe_t>::addr_t> _ether_addr(gxio_mpipe_link_t *link);
+static net_t<mpipe_t::ethernet_t::addr_t> _ether_addr(gxio_mpipe_link_t *link);
 
-// The NotifRing is being part of a single unique NotifGroup. One single bucket
-// is mapped to this NotifGroup.
-//
-// We could use multiple NotigRings linked to the same NotifGroup to enable some
-// kind of load balancing: with more than one NotifRing, each related to a
-// distinct thread, the hardware load-balancer will pick the least busy to
-// process packet notifications.
-//
-// NOTE: accepts a pointer to an mpipe_env_t instead of returning a new
-// mpipe_env_t so the structure can be efficiently allocated by the caller
-// (i.e. on the Tile's cache of the tile which uses the iqueue and equeue
-// wrappers).
-mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
+void mpipe_t::instance_t::run(void)
 {
+    int result;
+
+    // Binds the instance to its dataplane CPU.
+
+    result = tmc_cpus_set_my_cpu(this->cpu_id);
+    VERIFY_ERRNO(result, "tmc_cpus_set_my_cpu()");
+
+    #ifdef DEBUG_DATAPLANE
+        // Put dataplane tiles in "debug" mode. Interrupts other than page
+        // faults will generate a kernel stacktrace.
+        result = set_dataplane(DP_DEBUG);
+        VERIFY_ERRNO(result, "set_dataplane()");
+    #endif
+
+    // Polling loop over the packet queue. Tries to executes timers between
+    // polling attempts.
+
+    while (LIKELY(this->parent->is_running)) {
+        this->timers.tick();
+
+        gxio_mpipe_idesc_t idesc;
+
+        result = gxio_mpipe_iqueue_try_get(&this->iqueue, &idesc);
+
+        if (result == GXIO_MPIPE_ERR_IQUEUE_EMPTY) // Queue is empty. Retries.
+            continue;
+
+        if (gxio_mpipe_iqueue_drop_if_bad(&this->iqueue, &idesc)) {
+            DRIVER_DEBUG("Invalid packet dropped");
+            continue;
+        }
+
+        // Initializes a buffer cursor which starts at the Ethernet header and
+        // stops at the end of the packet.
+        //
+        // The buffer will be freed when the cursor will be destructed.
+        cursor_t cursor(&this->parent->context, &idesc, true);
+        cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
+
+        DRIVER_DEBUG("Receives a %zu bytes packet", cursor.size());
+
+        this->ethernet.receive_frame(cursor);
+    }
+}
+
+void mpipe_t::instance_t::send_packet(
+    size_t packet_size, function<void(cursor_t)> packet_writer
+)
+{
+    assert(packet_size <= this->parent->max_packet_size);
+
+    DRIVER_DEBUG("Sends a %zu bytes packet", packet_size);
+
+    // Allocates a buffer and executes the 'packet_writer' on its memory.
+    gxio_mpipe_bdesc_t bdesc = this->parent->_alloc_buffer(packet_size);
+
+    // Allocates an unmanaged cursor, which will not desallocate the buffer when
+    // destr
+    cursor_t cursor(&this->parent->context, &bdesc, packet_size, false);
+    packet_writer(cursor);
+
+    // Creates the egress descriptor.
+
+    gxio_mpipe_edesc_t edesc = { 0 };
+    edesc.bound     = 1;            // Last and single descriptor for the trame.
+    edesc.hwb       = 1,            // The buffer will be automaticaly freed.
+    edesc.xfer_size = packet_size;
+
+    // Sets 'va', 'stack_idx', 'inst', 'hwb', 'size' and 'c'.
+    gxio_mpipe_edesc_set_bdesc(&edesc, bdesc); 
+
+    // NOTE: if multiple packets are to be sent, reserve() + put_at() with a
+    // single memory barrier should be more efficient.
+    gxio_mpipe_equeue_put(&this->parent->equeue, edesc);
+}
+
+// We use multiple NotigRings linked to the same NotifGroup to enable some
+// kind of load balancing: with multiple NotifRings, each related to a distinct
+// worker thread, the hardware load-balancer will classify packets by their flow
+// (IP addresses, ports, ...) by worker.
+mpipe_t::mpipe_t(
+    const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers
+) : instances(n_workers)
+{
+    assert(n_workers > 0);
+    assert((unsigned int) n_workers <= N_BUCKETS);
+
     int result;
 
     gxio_mpipe_context_t * const context = &this->context;
@@ -96,37 +173,52 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
     }
 
     //
-    // Ingres queue.
+    // Checks if there is enough dataplane Tiles for the requested number of
+    // workers.
     //
-    // Initialized the NotifRing, NotifGroup, iqueue wrapper and the unique
-    // bucket.
+
+    {
+        // Finds dataplane Tiles.
+        cpu_set_t dataplane_cpu_set;
+        result = tmc_cpus_get_dataplane_cpus(&dataplane_cpu_set);
+        VERIFY_ERRNO(result, "tmc_cpus_get_dataplane_cpus()");
+
+        int count = tmc_cpus_count(&dataplane_cpu_set);
+        if (n_workers > count) {
+            DRIVER_DIE(
+                "There is not enough dataplane Tiles for the requested number "
+                "of workers (%u requested, having %u)", n_workers, count
+            );
+        }
+
+        for (int i = 0; i < n_workers; i++) {
+            instance_t *instance = &this->instances[i];
+
+            result = tmc_cpus_find_nth_cpu(&dataplane_cpu_set, i);
+            VERIFY_GXIO(result, "tmc_cpus_find_nth_cpu()");
+            instance->cpu_id = result;
+        }
+    }
+
+    //
+    // Ingres queues.
+    //
+    // Creates an iqueue and a notification ring for each worker, and a single
+    // notification group with its buckets.
     //
 
     {
         //
-        // NotifRing and iqueue wrapper
+        // Creates a NotifRing and an iqueue wrapper for each worker.
         //
 
-        // Gets a NotifRing ID.
-        // NOTE: multiple rings could be allocated so different threads could be
-        // able to process packets in parallel.
-        result = gxio_mpipe_alloc_notif_rings(context, 1 /* count */, 0, 0);
+        result = gxio_mpipe_alloc_notif_rings(context, n_workers, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_notif_rings()");
-        this->notif_ring_id = result;
+        unsigned int first_ring_id = result;
 
-        // Allocates the NotifRing.
-        // The NotifRing must be 4 KB aligned and must reside on a single
-        // physically contiguous memory. So we allocate a page sufficiently
-        // large to hold it. This page holding the notifications descriptors
-        // will reside on the current Tile's cache.
-        // NOTE: with multiple rings being associated with different threads, we
-        // should allocates the ring on its associated Tile's cache.
-
-        size_t ring_size = IQUEUE_ENTRIES * sizeof(gxio_mpipe_idesc_t);
-
-        // Cache pages on current tile.
         tmc_alloc_t alloc = TMC_ALLOC_INIT;
-        tmc_alloc_set_home(&alloc, TMC_ALLOC_HOME_HERE);
+
+        size_t ring_size = IQUEUE_ENTRIES * sizeof (gxio_mpipe_idesc_t);
 
         // Sets page_size >= ring_size.
         if (tmc_alloc_set_pagesize(&alloc, ring_size) == NULL)
@@ -134,51 +226,66 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
 
         assert(tmc_alloc_get_pagesize(&alloc) >= ring_size);
 
+        for (int i = 0; i < n_workers; i++) {
+            instance_t *instance = &this->instances[i];
+
+            unsigned int ring_id = first_ring_id + i;
+
+            // Allocates a NotifRing for each worker.
+            //
+            // The NotifRing must be 4 KB aligned and must reside on a single
+            // physically contiguous memory. So we allocate a page sufficiently
+            // large to hold it. This page holding the notifications descriptors
+            // will reside on the current Tile's cache.
+            //
+            // Allocated pages are cache-homed on the worker's Tile.
+
+            tmc_alloc_set_home(&alloc,  instance->cpu_id);
+
+            instance->notif_ring_mem = (char *) tmc_alloc_map(
+                &alloc, ring_size
+            );
+            if (instance->notif_ring_mem == NULL)
+                DRIVER_DIE("tmc_alloc_map()");
+
+            // ring is 4 KB aligned.
+            assert(((intptr_t) instance->notif_ring_mem & 0xFFF) == 0);
+
+            // Initializes an iqueue for the worker.
+
+            result = gxio_mpipe_iqueue_init(
+                &instance->iqueue, context, ring_id, instance->notif_ring_mem,
+                ring_size, 0
+            );
+            VERIFY_GXIO(result, "gxio_mpipe_iqueue_init()");
+        }
+
         DRIVER_DEBUG(
-            "Allocating %zu bytes for the NotifRing on a %zu bytes page",
-            ring_size, tmc_alloc_get_pagesize(&alloc)
+            "Allocated %u x %zu bytes for the NotifRings on a %zu bytes pages",
+            n_workers, ring_size, tmc_alloc_get_pagesize(&alloc)
         );
 
-        this->notif_ring_mem = (char *) tmc_alloc_map(&alloc, ring_size);
-        if (this->notif_ring_mem == NULL)
-            DRIVER_DIE("tmc_alloc_map()");
-
-        // ring is 4 KB aligned.
-        assert(((intptr_t) this->notif_ring_mem & 0xFFF) == 0);
-
-        // Initializes an iqueue which uses the ring memory and the mPIPE
-        // context.
-
-        result = gxio_mpipe_iqueue_init(
-            &this->iqueue, context, this->notif_ring_id,
-            this->notif_ring_mem, ring_size, 0
-        );
-        VERIFY_GXIO(result, "gxio_mpipe_iqueue_init()");
-
         //
-        // NotifGroup and buckets
+        // Create a single NotifGroup and a set of buckets
         //
-
-        // Allocates a single NotifGroup having a single NotifRing.
 
         result = gxio_mpipe_alloc_notif_groups(context, 1 /* count */, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_notif_groups()");
         this->notif_group_id = result;
 
-        // Allocates a single bucket. Each paquet will go to this bucket and
-        // will be mapped to the single NotigGroup.
-
-        result = gxio_mpipe_alloc_buckets(context, 1 /* count */, 0, 0);
+        result = gxio_mpipe_alloc_buckets(context, N_BUCKETS, 0, 0);
         VERIFY_GXIO(result, "gxio_mpipe_alloc_buckets()");
-        this->bucket_id = result;
+        this->first_bucket_id = result;
 
         // Initialize the NotifGroup and its buckets. Assigns the single
         // NotifRing to the group.
 
         result = gxio_mpipe_init_notif_group_and_buckets(
-            context, this->notif_group_id, this->notif_ring_id,
-            1 /* ring count */, this->bucket_id, 1 /* bucket count */,
-            GXIO_MPIPE_BUCKET_ROUND_ROBIN /* load-balancing mode */
+            context, this->notif_group_id, first_ring_id,
+            n_workers /* ring count */, this->first_bucket_id, N_BUCKETS,
+            // Load-balancing mode: packets of a same flow go to the same
+            // bucket.
+            GXIO_MPIPE_BUCKET_STATIC_FLOW_AFFINITY
         );
         VERIFY_GXIO(result, "gxio_mpipe_init_notif_group_and_buckets()");
     }
@@ -187,8 +294,6 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
     // Egress queue.
     //
     // Initializes a single eDMA ring with its equeue wrapper.
-    //
-    // For egress buffers, we allocate the largest 
     //
 
     {
@@ -381,10 +486,17 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
             }
         );
 
+        max_packet_size = this->buffer_stacks.back().buffer_size;
+
         #ifndef MPIPE_JUMBO_FRAMES
             gxio_mpipe_link_set_attr(&link, GXIO_MPIPE_LINK_RECEIVE_JUMBO, 1);
+
+            gxio_mpipe_equeue_set_snf_size(&this->equeue, max_packet_size);
+        #else 
+            max_packet_size = min((size_t) 1500, max_packet_size);
         #endif /* MPIPE_JUMBO_FRAMES */
 
+        DRIVER_DEBUG("Maximum packet size: %zu bytes", max_packet_size);
     }
 
     //
@@ -401,7 +513,7 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
         gxio_mpipe_rules_init(rules, context);
 
         result = gxio_mpipe_rules_begin(
-            rules, this->bucket_id, 1 /* bucket count */, NULL
+            rules, this->first_bucket_id, N_BUCKETS, nullptr
         );
         VERIFY_GXIO(result, "gxio_mpipe_rules_begin()");
 
@@ -410,88 +522,22 @@ mpipe_t::mpipe_t(const char *link_name, net_t<ipv4_mpipe_t::addr_t> ipv4_addr)
     }
 
     //
-    // Initializes the network protocols stack
+    // Initializes the network protocols stacks.
     //
 
     {
-        max_packet_size = this->buffer_stacks.back().buffer_size;
+        this->ether_addr = _ether_addr(&this->link);
 
-        #ifndef MPIPE_JUMBO_FRAMES
-            max_packet_size = min((size_t) 1500, max_packet_size);
-        #endif /* MPIPE_JUMBO_FRAMES */
-
-        DRIVER_DEBUG("Maximum packet size: %zu bytes", max_packet_size);
-
-        data_link.init(this, &timers, _ether_addr(&this->link), ipv4_addr);
-    }
-}
-
-void mpipe_t::run(void)
-{
-    // Polling loop over the packet queue. Tries to executes timers between
-    // polling attempts.
-
-    while (1) {
-        timers.tick();
-
-        gxio_mpipe_idesc_t idesc;
-
-        int ret = gxio_mpipe_iqueue_try_get(&this->iqueue, &idesc);
-
-        if (ret == GXIO_MPIPE_ERR_IQUEUE_EMPTY) // Queue is empty. Retries.
-            continue;
-
-        if (gxio_mpipe_iqueue_drop_if_bad(&this->iqueue, &idesc)) {
-            DRIVER_DEBUG("Invalid packet dropped");
-            continue;
+        for (instance_t &instance : this->instances) {
+            instance.parent = this;
+            instance.ethernet.init(
+                &instance, &instance.timers, this->ether_addr, ipv4_addr
+            );
         }
-
-        // Initializes a buffer cursor which starts at the Ethernet header and
-        // stops at the end of the packet.
-        //
-        // The buffer will be freed when the cursor will be destructed.
-        cursor_t cursor(&this->context, &idesc, true);
-        cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
-
-        DRIVER_DEBUG("Receives a %zu bytes packet", cursor.size());
-
-        this->data_link.receive_frame(cursor);
     }
 }
 
-
-void mpipe_t::send_packet(
-    size_t packet_size, function<void(cursor_t)> packet_writer
-)
-{
-    assert(packet_size <= max_packet_size);
-
-    DRIVER_DEBUG("Sends a %zu bytes packet", packet_size);
-
-    // Allocates a buffer and executes the 'packet_writer' on its memory.
-    gxio_mpipe_bdesc_t bdesc = _alloc_buffer(packet_size);
-
-    // Allocates an unmanaged cursor, which will not desallocate the buffer when
-    // destr
-    cursor_t cursor(&this->context, &bdesc, packet_size, false);
-    packet_writer(cursor);
-
-    // Creates the egress descriptor.
-
-    gxio_mpipe_edesc_t edesc = { 0 };
-    edesc.bound     = 1;            // Last and single descriptor for the trame.
-    edesc.hwb       = 1,            // The buffer will be automaticaly freed.
-    edesc.xfer_size = packet_size;
-
-    // Sets 'va', 'stack_idx', 'inst', 'hwb', 'size' and 'c'.
-    gxio_mpipe_edesc_set_bdesc(&edesc, bdesc); 
-
-    // NOTE: if multiple packets are to be sent, reserve() + put_at() with a
-    // single memory barrier should be more efficient.
-    gxio_mpipe_equeue_put(&this->equeue, edesc);
-}
-
-void mpipe_t::close(void)
+mpipe_t::~mpipe_t(void)
 {
     int result;
 
@@ -505,9 +551,11 @@ void mpipe_t::close(void)
 
     // Releases rings memory
 
-    size_t notif_ring_size = IQUEUE_ENTRIES * sizeof(gxio_mpipe_idesc_t);
-    result = tmc_alloc_unmap(this->notif_ring_mem, notif_ring_size );
-    VERIFY_ERRNO(result, "tmc_alloc_unmap()");
+    for (instance_t &instance : this->instances) {
+        size_t notif_ring_size = IQUEUE_ENTRIES * sizeof(gxio_mpipe_idesc_t);
+        result = tmc_alloc_unmap(instance.notif_ring_mem, notif_ring_size );
+        VERIFY_ERRNO(result, "tmc_alloc_unmap()");
+    }
 
     size_t edma_ring_size = EQUEUE_ENTRIES * sizeof(gxio_mpipe_edesc_t);
     result = tmc_alloc_unmap(this->edma_ring_mem, edma_ring_size);
@@ -521,6 +569,64 @@ void mpipe_t::close(void)
     }
 }
 
+// Wrapper over 'instance_t::run()' for 'pthread_create()'.
+void *worker_runner(void *);
+
+void mpipe_t::run(void)
+{
+    this->is_running = true;
+
+    // Starts N-1 worker threads. The last worker will be executed in the
+    // current thread.
+    for (size_t i = 0; i < instances.size() - 1; i++) {
+        instance_t *instance = &this->instances[i];
+
+        int result = pthread_create(
+            &instance->thread, nullptr, worker_runner, instance
+        );
+        VERIFY_PTHREAD(result, "pthread_create()");
+    }
+
+    // Executes the last worker in the current thread
+    {
+        instance_t *last_instance = &this->instances.back();
+        last_instance->thread = pthread_self();
+
+        worker_runner(last_instance);
+    }
+
+    // Waits for all threads to exit.
+    for (size_t i = 0; i < instances.size() - 1; i++) {
+        instance_t *instance = &this->instances[i];
+        pthread_join(instance->thread, nullptr);
+    }
+}
+
+void *worker_runner(void *instance_void)
+{
+    ((mpipe_t::instance_t *) instance_void)->run();
+    return nullptr;
+}
+
+void mpipe_t::stop(void)
+{
+    this->is_running = false;
+}
+
+// Replicates the call to every worker TCP stack.
+//
+// 
+void mpipe_t::tcp_listen(
+    tcp_t::port_t port, tcp_t::new_conn_callback_t new_conn_callback
+)
+{
+    assert(!this->is_running); // FIXME: not thread-safe.
+
+    for (instance_t &instance : this->instances)
+        instance.ethernet.ipv4.tcp.listen(port, new_conn_callback);
+}
+
+
 gxio_mpipe_bdesc_t mpipe_t::_alloc_buffer(size_t size)
 {
     // Finds the first buffer size large enough to hold the requested buffer.
@@ -533,7 +639,7 @@ gxio_mpipe_bdesc_t mpipe_t::_alloc_buffer(size_t size)
     DRIVER_DIE("No buffer is sufficiently large to hold the requested size.");
 }
 
-static net_t<ethernet_t<mpipe_t>::addr_t> _ether_addr(gxio_mpipe_link_t *link)
+static net_t<mpipe_t::ethernet_t::addr_t> _ether_addr(gxio_mpipe_link_t *link)
 {
     int64_t addr64 = gxio_mpipe_link_get_attr(link, GXIO_MPIPE_LINK_MAC);
 
@@ -541,7 +647,7 @@ static net_t<ethernet_t<mpipe_t>::addr_t> _ether_addr(gxio_mpipe_link_t *link)
     assert((addr64 & 0xFFFFFFFFFFFF) == addr64);
 
     // Immediately returns the address in network byte order.
-    net_t<ethernet_t<mpipe_t>::addr_t> addr;
+    net_t<mpipe_t::ethernet_t::addr_t> addr;
     addr.net = {
         (uint8_t) (addr64 >> 40),
         (uint8_t) (addr64 >> 32),

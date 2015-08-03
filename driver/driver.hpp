@@ -34,10 +34,16 @@
 // Checks for errors in function which returns -1 and sets errno on failure.
 #define VERIFY_ERRNO(VAL, WHAT)                                                \
     do {                                                                       \
-        long __val = (long) (VAL);                                             \
-        if (__val == -1)                                                       \
+        if (VAL == -1)                                                         \
             DRIVER_DIE("%s (errno: %d)", (WHAT), errno);                       \
     } while (0)
+
+// Checks for errors from the pthread_* calls, which returns 0 on success.
+#define VERIFY_PTHREAD(VAL, WHAT)                                              \
+  do {                                                                         \
+    if (VAL != 0)                                                              \
+        DRIVER_DIE("%s: (error: %d)", (WHAT), VAL);                            \
+  } while (0)
 
 // Checks for errors from the GXIO API, which returns negative error codes.
 #define VERIFY_GXIO(VAL, WHAT)                                                 \
