@@ -6,8 +6,8 @@ add_definitions(-DMPIPE_JUMBO_FRAMES)
 
 # add_definitions(-DMPIPE_CHAINED_BUFFERS)
 
-# add_definitions(-DNDEBUG) # Disable debug messages and assertions.
-add_definitions(-DNDEBUGMSG) # Disable debug messages.
+add_definitions(-DNDEBUG) # Disable debug messages and assertions.
+# add_definitions(-DNDEBUGMSG) # Disable debug messages.
 
 # End of CFLAGS
 

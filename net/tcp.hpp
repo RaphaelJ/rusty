@@ -288,7 +288,7 @@ struct tcp_t {
     };
 
     // Uniquely identifies a TCP Control Block.
-    typedef tcp_tcb_id_t<addr_t, port_t>        tcb_id_t;
+    typedef tcp_tcb_id_t<addr_t, port_t>                tcb_id_t;
 
     // Function given to 'conn_t::send()' which writes data into a transmission
     // buffer.
@@ -299,11 +299,15 @@ struct tcp_t {
     // The number of bytes to write is given by the cursor size. The function
     // could be called an undefined number of times, with different offsets,
     // because of packet segmentation and retransmission.
-    typedef function<void(size_t, cursor_t)>    writer_t;
+    typedef function<void(size_t, cursor_t)>            writer_t;
+
+    // Same as 'writer_t' but also returns the partial checksum of the written
+    // data.
+    typedef function<partial_sum_t(size_t, cursor_t)>   writer_sum_t;
 
     // Callback given to 'send()' which will be called once all the data
     // provided by the writer has been acked by the remote.
-    typedef function<void()>                    acked_callback_t;
+    typedef function<void()>                            acked_callback_t;
 
     // Datatype used by the application layer to control the connection.
     struct conn_t {
@@ -324,6 +328,15 @@ struct tcp_t {
         // write the data into the network buffers, and one which will be called
         // once the data have been acknowledged by the remote TCP.
         inline void send(size_t length, writer_t writer, acked_callback_t acked)
+        {
+            tcp_instance->_send(tcb_id, length, writer, acked);
+        }
+
+        // Same as the previous 'send()' but uses a writer which also computes
+        // the partial checksum of the written data.
+        inline void send(
+            size_t length, writer_sum_t writer, acked_callback_t acked
+        )
         {
             tcp_instance->_send(tcb_id, length, writer, acked);
         }
@@ -367,7 +380,7 @@ struct tcp_t {
     // Callback called on new connections on a port open in the LISTEN state.
     //
     // The function is given the identifier of the new established connection.
-    typedef function<conn_handlers_t(conn_t)> new_conn_callback_t;
+    typedef function<conn_handlers_t(conn_t)>           new_conn_callback_t;
 
     // TCP Control Block.
     //
@@ -596,11 +609,11 @@ struct tcp_t {
         // Contains segment payloads which have not been transmitted to the
         // application layer nor acknowledged because they have been delivered
         // out of order.
-        vector<out_of_order_segment_t>  out_of_order;
+        vector<out_of_order_segment_t>                  out_of_order;
 
         // Functions provided by the application layer to manage connection
         // events.
-        conn_handlers_t                 conn_handlers;
+        conn_handlers_t                                 conn_handlers;
 
         //
         // Transmission queue
@@ -622,7 +635,7 @@ struct tcp_t {
 
             // Function provided by the user to write data into transmission
             // buffers.
-            writer_t                            writer;
+            writer_sum_t                        writer;
 
             // Function which is called once all the data provided by the writer
             // has been acked by the remote.
@@ -641,19 +654,19 @@ struct tcp_t {
         // been entirely acknowledged yet.
         //
         // Entries will be removed once they have been fully acknowledged.
-        deque<tx_queue_entry_t> tx_queue_sent_unack;
+        deque<tx_queue_entry_t>                         tx_queue_sent_unack;
 
         // Contains entries which are pending to be sent.
         //
         // The first entry of this queue may be partially sent. Once an entry
         // has been fully transmitted, it is moved into the
         // 'tx_queue_sent_unack' queue.
-        deque<tx_queue_entry_t> tx_queue_not_sent;
+        deque<tx_queue_entry_t>                         tx_queue_not_sent;
 
         // Current timer identifier. Has 0 as value if no timer associated.
         //
         // If in the TIME-WAIT state, references the 2MSL timer.
-        timer_id_t              timer;
+        timer_id_t                                      timer;
 
         inline bool in_state(state_t states) const
         {
@@ -848,6 +861,8 @@ struct tcp_t {
                     this->_handle_closed_state(saddr, hdr, payload);
             } else {
                 tcb_t *tcb = &tcb_it->second;
+                
+                
 
                 if (tcb->in_state(tcb_t::SYN_SENT)) {
                     this->_handle_syn_sent_state(
@@ -914,6 +929,25 @@ private:
     // See 'conn_t::send()'.
     void _send(
         tcb_id_t tcb_id, size_t length, writer_t writer,
+        acked_callback_t acked_callback
+    )
+    {
+        writer_sum_t writer_sum =
+            [writer](size_t size, cursor_t out)
+            {
+                writer(size, out);
+                return partial_sum_t(out);
+            };
+
+        this->_send(tcb_id, length, writer_sum, acked_callback);
+    }
+
+    // Same as the previous 'send()' but uses a writer which also computes the
+    // partial checksum of the written data.
+    //
+    // See 'conn_t::send()'.
+    void _send(
+        tcb_id_t tcb_id, size_t length, writer_sum_t writer,
         acked_callback_t acked_callback
     )
     {
@@ -988,10 +1022,10 @@ private:
                 assert(payload_size <= tcb->tx_window.mss);
                 assert(payload_size <= tcb->tx_window.ready());
 
-                function<void(cursor_t)> payload_writer =
+                function<partial_sum_t(cursor_t)> payload_writer =
                     [writer, offset](cursor_t cursor)
                     {
-                        writer(offset, cursor);
+                        return writer(offset, cursor);
                     };
 
                 TCP_DEBUG(
@@ -1819,7 +1853,7 @@ private:
     void _send_fin_ack_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack,
-        function<void(cursor_t)> payload_writer, size_t payload_size
+        function<partial_sum_t(cursor_t)> payload_writer, size_t payload_size
     )
     {
         this->_send_segment(
@@ -1835,7 +1869,7 @@ private:
     void _send_ack_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack,
-        function<void(cursor_t)> payload_writer, size_t payload_size
+        function<partial_sum_t(cursor_t)> payload_writer, size_t payload_size
     )
     {
         this->_send_segment(
@@ -1989,12 +2023,13 @@ private:
 
             // Creates a function which writes the content of multiple
             // application level writers into a single network buffer.
-            function<void(cursor_t)> payload_writer =
+            function<partial_sum_t(cursor_t)> payload_writer =
                 [start_seq = tcb->tx_window.next, to_send](cursor_t cursor)
                 {
                     assert(!to_send.empty());
 
-                    seq_t seq = start_seq;
+                    seq_t         seq = start_seq;
+                    partial_sum_t partial_sum = partial_sum_t::ZERO;
 
                     for (const auto &entry : to_send) {
                         assert(!cursor.empty());
@@ -2004,13 +2039,17 @@ private:
                         size_t offset = (seq - entry.begin).value,
                                length = (entry.end - seq).value;
 
-                        entry.writer(offset, cursor.take(length));
+                        partial_sum = partial_sum.append(
+                            entry.writer(offset, cursor.take(length))
+                        );
                         cursor = cursor.drop(length);
 
                         seq = entry.end;
                     }
 
                     assert(cursor.empty());
+
+                    return partial_sum;
                 };
 
             if (
@@ -2109,7 +2148,7 @@ private:
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
         net_t<win_size_t> window, options_t options,
-        function<void(cursor_t)> payload_writer, size_t payload_size
+        function<partial_sum_t(cursor_t)> payload_writer, size_t payload_size
     )
     {
         net_t<addr_t> saddr = this->network->addr;
@@ -2140,9 +2179,7 @@ private:
             partial_sum_t options_sum    = get<1>(ret);
             size_t        options_size   = get<2>(ret);
 
-            payload_writer(payload_cursor);
-            partial_sum_t payload_sum = partial_sum_t(payload_cursor);
-            // TODO: cache the computation of the payload sum.
+            partial_sum_t payload_sum = payload_writer(payload_cursor);
 
             partial_sum_t partial_sum = pseudo_hdr_sum.append(options_sum)
                                                       .append(payload_sum);
@@ -2163,7 +2200,7 @@ private:
     {
         this->_send_segment(
             sport, daddr, dport, seq, ack, flags, window, options,
-            [](cursor_t cursor) {}, 0
+            [](cursor_t cursor) { return partial_sum_t::ZERO; }, 0
         );
     }
 

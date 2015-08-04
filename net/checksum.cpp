@@ -24,7 +24,7 @@
 
 #include <endian.h>         // __BIG_ENDIAN, __BYTE_ORDER, __LITTLE_ENDIAN
 
-#include "net/endian.hpp"   // net_t
+#include "net/endian.hpp"   // net_t, to_host(), to_network()
 
 #include "net/checksum.hpp"
 
@@ -34,6 +34,13 @@ namespace net {
 const partial_sum_t partial_sum_t::ZERO = partial_sum_t();
 
 const checksum_t    checksum_t::ZERO    = checksum_t();
+
+#ifndef NDEBUG
+    // Reference implementation of the ones's complement sum.
+    //
+    // Only used for debugging.
+    static uint16_t _ones_complement_sum_naive(const void *data, size_t size);
+#endif /* NDEBUG */
 
 uint16_t _ones_complement_sum(const void *data, size_t size)
 {
@@ -98,8 +105,9 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
 
     assert(data != nullptr);
 
-    uint64_t       sum      = 0;
-    const uint32_t *data32  = (const uint32_t *) ((intptr_t) data & ~0x3);
+    uint64_t        sum         = 0;
+    const uint32_t  *data32     = (const uint32_t *) ((intptr_t) data & ~0x3);
+    size_t          remaining   = size;
 
     // Processes the first bytes not aligned on 32 bits.
     intptr_t unaligned_offset = (intptr_t) data & 0x3;
@@ -116,10 +124,10 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
             #error "Please set __BYTE_ORDER in <bits/endian.h>"
         #endif
 
-        if (unaligned_bytes > size) {
+        if (unaligned_bytes > remaining) {
             // Masks the bytes that are after the buffer.
-            size_t mask_right = unaligned_bytes - size;
-            unaligned_bytes = size;
+            size_t mask_right = unaligned_bytes - remaining;
+            unaligned_bytes = remaining;
 
             #if __BYTE_ORDER == __LITTLE_ENDIAN
                 word_mask &= 0xFFFFFFFF >> (mask_right * 8);
@@ -131,24 +139,24 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
         }
 
         sum += data32[0] & word_mask;
-        size -= unaligned_bytes;
+        remaining -= unaligned_bytes;
         data32++;
     }
 
     // Sums 32 bits at a time.
-    while (size >= sizeof (uint32_t)) {
+    while (remaining >= sizeof (uint32_t)) {
         sum += *data32;
-        size -= sizeof (uint32_t);
+        remaining -= sizeof (uint32_t);
         data32++;
     }
 
     // Sums the last bytes which could not fully fit a 32 bits integer.
-    if (size > 0) {
+    if (remaining > 0) {
         // Loads the last entire word but masks the bytes that are after the
         // buffer. This should be safe as a memory page should never end on a
         // word boundary.
 
-        size_t mask_right = sizeof (uint32_t) - size;
+        size_t mask_right = sizeof (uint32_t) - remaining;
 
         #if __BYTE_ORDER == __LITTLE_ENDIAN
             uint32_t word_mask = 0xFFFFFFFF >> (mask_right * 8);
@@ -162,17 +170,135 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
     }
 
     // 16 bits ones' complement sums of the two sub-sums and the carry bits.
-    while (sum >> 16)
-        sum = (sum & 0xFFFF) + (sum >> 16);
+    do {
+        sum = (sum >> 16) + (sum & 0xFFFF);
+    } while (sum >> 16);
 
     // If data started on an odd address, we computed the wrong sum. We computed
     // [0, a] +' [b, c] +' ... instead of [a, b] +' [c, d] +' ...
     //
     // The correct sum can be obtained by swapping bytes.
+    uint16_t ret;
     if ((intptr_t) data & 0x1)
-        return _swap_bytes((uint16_t) sum);
+        ret = _swap_bytes((uint16_t) sum);
     else
-        return (uint16_t) sum;
+        ret = (uint16_t) sum;
+
+    assert(ret == _ones_complement_sum_naive(data, size));
+
+    return ret;
 }
+
+partial_sum_t precomputed_sums_t::sum(size_t begin, size_t end) const
+{
+    assert(begin <= end);
+    assert(end <= this->size);
+
+    // If the section starts at an odd index. Removes the odd byte.
+    size_t begin_div2 = begin / 2,
+           end_div2   = end   / 2;
+
+    uint32_t sum = this->table[end_div2] - this->table[begin_div2];
+
+    // Removes the non-included first byte of the first 16 bits word.
+    if (begin & 0x1) {
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            sum -= ((const char *) this->data)[begin - 1] << 8;
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            sum -= ((const char *) this->data)[begin - 1];
+        #else
+            #error "Please set __BYTE_ORDER in <bits/endian.h>"
+        #endif
+
+        // Removes the carry bit before swapping bytes.
+        sum = (sum >> 16) + (sum & 0xFFFF);
+
+        sum = (uint32_t) _swap_bytes((uint16_t) sum);
+    }
+
+    // Adds the included last byte.
+    if (end & 0x1) {
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            sum += ((const char *) this->data)[end - 1];
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            sum += ((const char *) this->data)[end - 1] << 8;
+        #else
+            #error "Please set __BYTE_ORDER in <bits/endian.h>"
+        #endif
+    }
+
+    sum = (sum >> 16) + (sum & 0xFFFF);
+
+    size_t size = end - begin;
+
+    partial_sum_t ret = partial_sum_t((uint16_t) sum, size & 0x1);
+
+    assert(ret == partial_sum_t((const char *) this->data + begin, size));
+
+    return ret;
+}
+
+const uint16_t *
+precomputed_sums_t::_precompute_table(const void *_data, size_t _size)
+{
+    size_t size_table = _size / 2 + 1;
+
+    uint16_t *table = new uint16_t[size_table];
+
+    // Sums two bytes at a time.
+    const uint16_t *data16 = (const uint16_t *) _data;
+
+    table[0] = 0;
+    for (size_t i = 1; i < size_table; i++) {
+        // Sums pair of bytes in a 32 bits integer, so the carry bit will not be
+        // lost.
+        uint32_t sum = (uint32_t) table[i - 1] + (uint32_t) data16[i - 1];
+
+        // Reports the carrybit in the stored 16 bits sum.
+        table[i] = (uint16_t) ((sum >> 16) + (sum & 0xFFFF));
+    }
+
+    assert(
+           table[size_table - 1]
+        == _ones_complement_sum_naive(_data, _size ^ 0x1)
+    );
+
+    return table;
+}
+
+#ifndef NDEBUG
+    static uint16_t _ones_complement_sum_naive(const void *data, size_t size)
+    {
+        uint64_t        sum     = 0;
+
+        // Sums two bytes at a time.
+        const uint16_t  *data16 = (const uint16_t *) data;
+
+        while (size > 1) {
+            sum     += *data16;
+            size    -= 2;
+            data16++;
+        }
+
+        // Adds left-over byte, if any.
+        if (size > 0) {
+            #if __BYTE_ORDER == __LITTLE_ENDIAN
+                uint16_t mask = 0x00FF;
+            #elif __BYTE_ORDER == __BIG_ENDIAN
+                uint16_t mask = 0xFF00;
+            #else
+                #error "Please set __BYTE_ORDER in <bits/endian.h>"
+            #endif
+
+            sum += *data16 & mask;
+        }
+
+        // Folds 64-bit sum to 16 bits.
+        while (sum >> 16)
+            sum = (sum >> 16) + (sum & 0xFFFF);
+
+        return (uint16_t) sum;
+    }
+#endif /* NDEBUG */
 
 } } /* namespace tcp_mpipe::net */

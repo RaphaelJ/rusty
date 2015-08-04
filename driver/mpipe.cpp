@@ -29,11 +29,13 @@
 #include <functional>
 #include <utility>              // min()
 
-#include <gxio/mpipe.h>         // gxio_mpipe_*
 #include <net/ethernet.h>       // struct ether_addr
 #include <pthread.h>            // pthread_*
+
+#include <gxio/mpipe.h>         // gxio_mpipe_*
 #include <tmc/alloc.h>          // tmc_alloc_map(), tmc_alloc_set_home(),
                                 // tmc_alloc_set_pagesize().
+#include <tmc/mem.h>            // tmc_mem_prefetch()
 #include <tmc/cpus.h>           // tmc_cpus_*
 
 #include "driver/driver.hpp"    // VERIFY_ERRNO, VERIFY_GXIO
@@ -94,6 +96,8 @@ void mpipe_t::instance_t::run(void)
         // The buffer will be freed when the cursor will be destructed.
         cursor_t cursor(&this->parent->context, &idesc, true);
         cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
+
+        tmc_mem_prefetch(cursor.current, cursor.current_size);
 
         DRIVER_DEBUG("Receives a %zu bytes packet", cursor.size());
 

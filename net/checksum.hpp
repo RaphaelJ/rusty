@@ -36,11 +36,9 @@ static inline uint16_t _swap_bytes(uint16_t bytes);
 
 // -----------------------------------------------------------------------------
 
+// Partially computed checksums.
 //
-// Partial sum
-//
-
-// Partially computed checksums. Used to compute a checksum incrementally.
+// Used to compute a checksum incrementally.
 //
 // Can be computed with 'partial_sum_t()' and combined with an other partially
 // computed sum with 'append()'. The checksum can be then computed from this
@@ -102,7 +100,59 @@ struct partial_sum_t {
 
         return { (uint16_t) sum, this->odd != second.odd };
     }
+
+    inline friend bool operator==(partial_sum_t a, partial_sum_t b)
+    {
+        return a.sum == b.sum && a.odd == b.odd;
+    }
+
+    inline friend bool operator!=(partial_sum_t a, partial_sum_t b)
+    {
+        return !(a == b);
+    }
 };
+
+// -----------------------------------------------------------------------------
+
+// Precomputed partial sum table.
+//
+// Once computed from a data buffer, the precomputed table can gives in constant
+// time the one's complement sum of any subsection of the buffer.
+struct precomputed_sums_t {
+    const void      *data;
+    const size_t    size;
+
+    const uint16_t  *table;
+
+    // Given a data buffer and its size, precomputes the one's complement sum
+    // table.
+    //
+    // '_data' must never be de-allocated before the precomputed sum table.
+    //
+    // Complexity: O(_size).
+    precomputed_sums_t(const void *_data, size_t _size)
+        : data(_data), size(_size), table(_precompute_table(_data, _size))
+    {
+    }
+
+    // Returns the partial sum of the data in the buffer which starts at 'begin'
+    // (inclusive) and which stops at 'end' (excluded).
+    partial_sum_t sum(size_t begin, size_t end) const;
+
+    inline void prefetch(size_t begin, size_t end) const
+    {
+        size_t begin_div2 = begin / 2,
+               end_div2   = end   / 2;
+        __builtin_prefetch(this->table + end_div2);
+        __builtin_prefetch(this->table + begin_div2);
+    }
+
+private:
+
+    // Allocates and computes the one's complement sum table.
+    static const uint16_t *_precompute_table(const void *_data, size_t _size);
+};
+
 
 // -----------------------------------------------------------------------------
 

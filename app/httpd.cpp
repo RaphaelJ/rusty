@@ -29,14 +29,19 @@
 #include <dirent.h>             // struct dirent, opendir(), readdir()
 #include <sys/stat.h>           // struct stat, stat()
 
+#include <tmc/mem.h>            // tmc_mem_prefetch()
+
 #include "driver/cpu.hpp"
 #include "driver/mpipe.hpp"
+#include "net/checksum.hpp"     // partial_sum_t, precomputed_sums_t
 #include "util/macros.hpp"      // LIKELY(), UNLIKELY
 
 using namespace std;
 
 using namespace tcp_mpipe::driver;
 using namespace tcp_mpipe::net;
+
+#define USE_PRECOMPUTED_CHECKSUMS
 
 #define HTTPD_COLOR     COLOR_GRN
 #define HTTPD_DEBUG(MSG, ...)                                                  \
@@ -96,6 +101,10 @@ struct equal_to<filename_t> {
 struct file_t {
     const char                      *content;
     size_t                          content_len;
+
+    #ifdef USE_PRECOMPUTED_CHECKSUMS
+        precomputed_sums_t              precomputed_sums;
+    #endif /* USE_PRECOMPUTED_CHECKSUMS */
 };
 
 static void _print_usage(char **argv);
@@ -261,22 +270,29 @@ static void _preload_files(
 
         // Obtains the size of the file
         fseek(file, 0, SEEK_END);
-        size_t content_len = ftell(file);
+        size_t content_size = ftell(file);
         fseek(file, 0, SEEK_SET);
 
         // Reads the file content
 
-        char *content = new char[content_len + 1];
-        size_t read = fread(content, 1, content_len, file);
+        char *content = new char[content_size + 1];
+        size_t read = fread(content, 1, content_size, file);
 
-        if (read != content_len)
-            HTTPD_DIE("Unable to read a file %zu %zu", read, content_len);
+        if (read != content_size)
+            HTTPD_DIE("Unable to read a file %zu %zu", read, content_size);
 
-        content[content_len] = '\0';
+        content[content_size] = '\0';
 
         fclose(file);
 
-        file_t entry = { content, content_len };
+        #ifdef USE_PRECOMPUTED_CHECKSUMS
+            file_t entry = {
+                content, content_size, precomputed_sums_t(content, content_size)
+            };
+        #else
+            file_t entry = { content, content_size };
+        #endif /* USE_PRECOMPUTED_CHECKSUMS */
+
         files->emplace(filename, entry);
     }
 
@@ -373,14 +389,23 @@ void _respond_with_200(mpipe_t::tcp_t::conn_t conn, const file_t *file)
 
     size_t total_len = header_len + file->content_len;
 
-    conn.send(
-        total_len,
+    #ifdef USE_PRECOMPUTED_CHECKSUMS
+        mpipe_t::tcp_t::writer_sum_t writer =
+    #else
+        mpipe_t::tcp_t::writer_t writer =
+    #endif /* USE_PRECOMPUTED_CHECKSUMS */
         [file](size_t offset, mpipe_t::cursor_t out)
         {
             size_t content_offset;
 
+            #ifdef USE_PRECOMPUTED_CHECKSUMS
+                partial_sum_t partial_sum;
+            #endif /* USE_PRECOMPUTED_CHECKSUMS */
+
             // Writes the HTTP header if required.
             if (offset < header_len) {
+                tmc_mem_prefetch(header, sizeof header);
+
                 char buffer[header_len + 1];
 
                 snprintf(buffer, sizeof buffer, header, file->content_len);
@@ -389,19 +414,42 @@ void _respond_with_200(mpipe_t::tcp_t::conn_t conn, const file_t *file)
 
                 out            = out.write(buffer + offset, to_write);
                 content_offset = 0;
-            } else
+
+                #ifdef USE_PRECOMPUTED_CHECKSUMS
+                    partial_sum = partial_sum_t(buffer + offset, to_write);
+                #endif /* USE_PRECOMPUTED_CHECKSUMS */
+            } else {
                 content_offset = offset - header_len;
 
+                #ifdef USE_PRECOMPUTED_CHECKSUMS
+                    partial_sum = partial_sum_t::ZERO;
+                #endif /* USE_PRECOMPUTED_CHECKSUMS */
+            }
+
+            size_t out_size     = out.size();
+            size_t content_end  = content_offset + out_size;
+
+            tmc_mem_prefetch(file->content + content_offset, out_size);
+
+            #ifdef USE_PRECOMPUTED_CHECKSUMS
+                file->precomputed_sums.prefetch(content_offset, content_end);
+            #endif /* USE_PRECOMPUTED_CHECKSUMS */
+
             // Writes the file content if required.
-            size_t out_size = out.size();
             if (out_size > 0) {
                 assert(out_size <= file->content_len - content_offset);
                 out.write(file->content + content_offset, out_size);
             }
-        },
 
-        _do_nothing // Does nothing on acknowledgment.
-    );
+            #ifdef USE_PRECOMPUTED_CHECKSUMS
+                // Returns the precomputed checksum sums.
+                return (partial_sum_t) partial_sum.append(
+                    file->precomputed_sums.sum(content_offset, content_end)
+                );
+            #endif /* USE_PRECOMPUTED_CHECKSUMS */
+        };
+
+    conn.send(total_len, writer, _do_nothing /* Does nothing on ACK */);
 }
 
 #define RESPOND_WITH_CONTENT(CONTENT)                                          \
