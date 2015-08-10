@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <memory>               // allocator
 #include <utility>              // min()
 
 #include <net/ethernet.h>       // struct ether_addr
@@ -38,6 +39,7 @@
 #include <tmc/mem.h>            // tmc_mem_prefetch()
 #include <tmc/cpus.h>           // tmc_cpus_*
 
+#include "driver/allocator.hpp" // tile_allocator_t
 #include "driver/driver.hpp"    // VERIFY_ERRNO, VERIFY_GXIO
 #include "driver/buffer.hpp"    // cursor_t
 #include "net/endian.hpp"       // net_t
@@ -56,7 +58,10 @@ namespace driver {
 // environment (in network byte order).
 static net_t<mpipe_t::ethernet_t::addr_t> _ether_addr(gxio_mpipe_link_t *link);
 
-static pthread_spinlock_t lock;
+mpipe_t::instance_t::instance_t(alloc_t _alloc)
+    : alloc(_alloc), ethernet(_alloc), timers(_alloc)
+{
+}
 
 void mpipe_t::instance_t::run(void)
 {
@@ -96,7 +101,7 @@ void mpipe_t::instance_t::run(void)
         // stops at the end of the packet.
         //
         // The buffer will be freed when the cursor will be destructed.
-        cursor_t cursor(&this->parent->context, &idesc, true);
+        cursor_t cursor(&this->parent->context, &idesc, true, this->alloc);
         cursor = cursor.drop(gxio_mpipe_idesc_get_l2_offset(&idesc));
 
         tmc_mem_prefetch(cursor.current, cursor.current_size);
@@ -120,7 +125,9 @@ void mpipe_t::instance_t::send_packet(
 
     // Allocates an unmanaged cursor, which will not desallocate the buffer when
     // destr
-    cursor_t cursor(&this->parent->context, &bdesc, packet_size, false);
+    cursor_t cursor(
+        &this->parent->context, &bdesc, packet_size, false, this->alloc
+    );
     packet_writer(cursor);
 
     // Creates the egress descriptor.
@@ -146,8 +153,6 @@ mpipe_t::mpipe_t(
     const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers
 ) : instances(n_workers)
 {
-    pthread_spin_init(&lock, PTHREAD_PROCESS_PRIVATE);
-
     assert(n_workers > 0);
     assert((unsigned int) n_workers <= N_BUCKETS);
 
@@ -184,6 +189,8 @@ mpipe_t::mpipe_t(
     // Checks if there is enough dataplane Tiles for the requested number of
     // workers.
     //
+    // Allocates and constructs the stack instance for each worker.
+    //
 
     {
         // Finds dataplane Tiles.
@@ -200,11 +207,25 @@ mpipe_t::mpipe_t(
         }
 
         for (int i = 0; i < n_workers; i++) {
-            instance_t *instance = &this->instances[i];
-
             result = tmc_cpus_find_nth_cpu(&dataplane_cpu_set, i);
             VERIFY_GXIO(result, "tmc_cpus_find_nth_cpu()");
-            instance->cpu_id = result;
+
+            int cpu_id = result;
+
+            #ifdef USE_TILE_ALLOCATOR
+                // Allocates the instance on its dedicated CPU.
+                tile_allocator_t<instance_t> alloc(cpu_id);
+            #else
+                // Uses the standard allocator.
+                allocator<instance_t> alloc;
+            #endif /* USE_TILE_ALLOCATOR */
+
+            this->instances[i] = alloc.allocate(1);
+
+            // Constructs the instance and gives the allocator.
+            new (this->instances[i]) instance_t(alloc);
+
+            this->instances[i]->cpu_id = cpu_id;
         }
     }
 
@@ -235,7 +256,7 @@ mpipe_t::mpipe_t(
         assert(tmc_alloc_get_pagesize(&alloc) >= ring_size);
 
         for (int i = 0; i < n_workers; i++) {
-            instance_t *instance = &this->instances[i];
+            instance_t *instance = this->instances[i];
 
             unsigned int ring_id = first_ring_id + i;
 
@@ -536,10 +557,10 @@ mpipe_t::mpipe_t(
     {
         this->ether_addr = _ether_addr(&this->link);
 
-        for (instance_t &instance : this->instances) {
-            instance.parent = this;
-            instance.ethernet.init(
-                &instance, &instance.timers, this->ether_addr, ipv4_addr
+        for (instance_t *instance : this->instances) {
+            instance->parent = this;
+            instance->ethernet.init(
+                instance, &instance->timers, this->ether_addr, ipv4_addr
             );
         }
     }
@@ -559,9 +580,9 @@ mpipe_t::~mpipe_t(void)
 
     // Releases rings memory
 
-    for (instance_t &instance : this->instances) {
+    for (instance_t *instance : this->instances) {
         size_t notif_ring_size = IQUEUE_ENTRIES * sizeof(gxio_mpipe_idesc_t);
-        result = tmc_alloc_unmap(instance.notif_ring_mem, notif_ring_size );
+        result = tmc_alloc_unmap(instance->notif_ring_mem, notif_ring_size );
         VERIFY_ERRNO(result, "tmc_alloc_unmap()");
     }
 
@@ -587,7 +608,7 @@ void mpipe_t::run(void)
     // Starts N-1 worker threads. The last worker will be executed in the
     // current thread.
     for (size_t i = 0; i < instances.size() - 1; i++) {
-        instance_t *instance = &this->instances[i];
+        instance_t *instance = this->instances[i];
 
         int result = pthread_create(
             &instance->thread, nullptr, worker_runner, instance
@@ -597,7 +618,7 @@ void mpipe_t::run(void)
 
     // Executes the last worker in the current thread
     {
-        instance_t *last_instance = &this->instances.back();
+        instance_t *last_instance = this->instances.back();
         last_instance->thread = pthread_self();
 
         worker_runner(last_instance);
@@ -605,7 +626,7 @@ void mpipe_t::run(void)
 
     // Waits for all threads to exit.
     for (size_t i = 0; i < instances.size() - 1; i++) {
-        instance_t *instance = &this->instances[i];
+        instance_t *instance = this->instances[i];
         pthread_join(instance->thread, nullptr);
     }
 }
@@ -623,15 +644,16 @@ void mpipe_t::stop(void)
 
 // Replicates the call to every worker TCP stack.
 //
-// 
+// FIXME: Is not thread-safe, could not be called while the instances are
+// running.
 void mpipe_t::tcp_listen(
     tcp_t::port_t port, tcp_t::new_conn_callback_t new_conn_callback
 )
 {
     assert(!this->is_running); // FIXME: not thread-safe.
 
-    for (instance_t &instance : this->instances)
-        instance.ethernet.ipv4.tcp.listen(port, new_conn_callback);
+    for (instance_t *instance : this->instances)
+        instance->ethernet.ipv4.tcp.listen(port, new_conn_callback);
 }
 
 

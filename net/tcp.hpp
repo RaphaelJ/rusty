@@ -29,9 +29,10 @@
 #include <deque>
 #include <functional>               // equal_to, hash
 #include <map>
+#include <memory>                   // shared_ptr
 #include <tuple>
 #include <unordered_map>
-#include <utility>                  // swap()
+#include <utility>                  // pair, swap()
 
 #include <netinet/tcp.h>            // TCPOPT_EOL, TCPOPT_NOP, TCPOPT_MAXSEG
 
@@ -83,7 +84,7 @@ struct tcp_tcb_id_t {
 
 // TCP transport layer able to process segment from and to the specified network
 // 'network_var_t' layer.
-template <typename network_var_t>
+template <typename network_var_t, typename alloc_t = allocator<char *>>
 struct tcp_t {
     //
     // Member types
@@ -98,7 +99,7 @@ struct tcp_t {
     typedef typename timer_manager_t::timer_id_t    timer_id_t;
     typedef typename timer_manager_t::delay_t       delay_t;
 
-    typedef tcp_t<network_t>                        this_t;
+    typedef tcp_t<network_t, alloc_t>               this_t;
 
     typedef typename network_t::addr_t              addr_t;
     typedef uint16_t                                port_t;
@@ -382,6 +383,17 @@ struct tcp_t {
     // The function is given the identifier of the new established connection.
     typedef function<conn_handlers_t(conn_t)>           new_conn_callback_t;
 
+    // Types related to the 'listens' hash table.
+    typedef pair<const net_t<port_t>, new_conn_callback_t>
+                                                        listens_pair_t;
+    typedef typename alloc_t::template rebind<listens_pair_t>::other
+                                                        listens_alloc_t;
+    typedef unordered_map<
+                net_t<port_t>, new_conn_callback_t,
+                hash<net_t<port_t>>, equal_to<net_t<port_t>>,
+                listens_alloc_t
+            >                                           listens_t;
+
     // TCP Control Block.
     //
     // Contains information to track an established TCP connection. Each TCB is
@@ -609,7 +621,7 @@ struct tcp_t {
         // Contains segment payloads which have not been transmitted to the
         // application layer nor acknowledged because they have been delivered
         // out of order.
-        vector<out_of_order_segment_t>                  out_of_order;
+        vector<out_of_order_segment_t, alloc_t>         out_of_order;
 
         // Functions provided by the application layer to manage connection
         // events.
@@ -654,19 +666,25 @@ struct tcp_t {
         // been entirely acknowledged yet.
         //
         // Entries will be removed once they have been fully acknowledged.
-        deque<tx_queue_entry_t>                         tx_queue_sent_unack;
+        deque<tx_queue_entry_t, alloc_t>        tx_queue_sent_unack;
 
         // Contains entries which are pending to be sent.
         //
         // The first entry of this queue may be partially sent. Once an entry
         // has been fully transmitted, it is moved into the
         // 'tx_queue_sent_unack' queue.
-        deque<tx_queue_entry_t>                         tx_queue_not_sent;
+        deque<tx_queue_entry_t, alloc_t>        tx_queue_not_sent;
 
         // Current timer identifier. Has 0 as value if no timer associated.
         //
         // If in the TIME-WAIT state, references the 2MSL timer.
-        timer_id_t                                      timer;
+        timer_id_t                              timer;
+
+        tcb_t(alloc_t _alloc = alloc_t())
+            : out_of_order(_alloc), tx_queue_sent_unack(_alloc),
+              tx_queue_not_sent(_alloc)
+        {
+        }
 
         inline bool in_state(state_t states) const
         {
@@ -674,6 +692,15 @@ struct tcp_t {
         }
     };
 
+    // Types related to the 'tcbs' hash table.
+    typedef pair<const tcb_id_t, tcb_t>                 tcbs_pair_t;
+    typedef typename alloc_t::template rebind<tcbs_pair_t>::other
+                                                        tcbs_alloc_t;
+    typedef unordered_map<
+                tcb_id_t, tcb_t,
+                hash<tcb_id_t>, equal_to<tcb_id_t>,
+                tcbs_alloc_t
+            >                                           tcbs_t;
     //
     // Static fields
     //
@@ -706,23 +733,25 @@ struct tcp_t {
     //
 
     // Lower network layer instance.
-    network_t                                               *network;
+    network_t       *network;
 
-    timer_manager_t                                         *timers;
+    timer_manager_t *timers;
+
+    alloc_t         alloc;
 
     // Ports which are in the LISTEN state, passively waiting for client
     // connections.
     //
     // Each open port maps to a callback function provided by the application to
     // handle new connections.
-    unordered_map<net_t<port_t>, new_conn_callback_t>       listens;
+    listens_t       listens;
 
     // TCP Control Blocks for active connections.
-    unordered_map<tcb_id_t, tcb_t>                          tcbs;
+    tcbs_t          tcbs;
 
     // Maximum segment size (TCP segment payload, without headers but with
     // options) that this TCP instance can emit.
-    mss_t                                                   mss;
+    mss_t           mss;
 
     //
     // Methods
@@ -731,7 +760,10 @@ struct tcp_t {
     // Creates an TCP environment without initializing it.
     //
     // One must call 'init()' before using any other method.
-    tcp_t(void)
+    tcp_t(alloc_t _alloc = alloc_t())
+      : alloc(_alloc),
+        listens(0, hash<net_t<port_t>>(), equal_to<net_t<port_t>>(), _alloc),
+        tcbs(0, hash<tcb_id_t>(), equal_to<tcb_id_t>(), _alloc)
     {
     }
 
@@ -739,9 +771,13 @@ struct tcp_t {
     //
     // Does the same thing as creating the environment with 'tcp_t()' and then
     // calling 'init()'.
-    tcp_t(network_t *_network, timer_manager_t *_timers)
-        : network(_network), timers(_timers),
-          mss(_network->max_payload_size - HEADER_SIZE)
+    tcp_t(
+        network_t *_network, timer_manager_t *_timers,
+        alloc_t _alloc = alloc_t()
+    ) : network(_network), timers(_timers), alloc(_alloc),
+        listens(0, hash<net_t<port_t>>(), equal_to<net_t<port_t>>(), _alloc),
+        tcbs(0, hash<tcb_id_t>(), equal_to<tcb_t>(), _alloc),
+        mss(_network->max_payload_size - HEADER_SIZE)
     {
     }
 
@@ -1161,7 +1197,7 @@ private:
 
             auto p = this->tcbs.emplace(
                 piecewise_construct, forward_as_tuple(tcb_id),
-                forward_as_tuple()
+                forward_as_tuple(this->alloc)
             );
             assert(p.second); // Emplace succeed.
             tcb_t *tcb = &p.first->second;
@@ -1991,11 +2027,15 @@ private:
             }
 
             // Set of entries to be sent.
-            vector<typename tcb_t::tx_queue_entry_t> to_send(n_entries);
+            shared_ptr<vector<typename tcb_t::tx_queue_entry_t, alloc_t> >
+//                 to_send = allocate_shared(this->alloc, n_entries, this->alloc)
+                to_send( new vector<typename tcb_t::tx_queue_entry_t, alloc_t>(n_entries, this->alloc))
+            ;
+
             copy(
                 tcb->tx_queue_not_sent.begin(),
                 tcb->tx_queue_not_sent.begin() + n_entries,
-                to_send.begin()
+                to_send->begin()
             );
 
             // Moves entries from the 'tx_queue_not_sent' queue to the
@@ -2024,12 +2064,12 @@ private:
             function<partial_sum_t(cursor_t)> payload_writer =
                 [start_seq = tcb->tx_window.next, to_send](cursor_t cursor)
                 {
-                    assert(!to_send.empty());
+                    assert(!to_send->empty());
 
                     seq_t         seq = start_seq;
                     partial_sum_t partial_sum = partial_sum_t::ZERO;
 
-                    for (const auto &entry : to_send) {
+                    for (const auto &entry : *to_send) {
                         assert(!cursor.empty());
                         assert(entry.begin <= seq);
                         assert(entry.end > seq);
@@ -2248,43 +2288,43 @@ private:
 // Initializes static fields and methods.
 //
 
-template <typename network_t>
-const typename tcp_t<network_t>::options_t
-tcp_t<network_t>::EMPTY_OPTIONS = {
-    tcp_t<network_t>::options_t::NO_MSS_OPTION
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::options_t
+tcp_t<network_t, alloc_t>::EMPTY_OPTIONS = {
+    tcp_t<network_t, alloc_t>::options_t::NO_MSS_OPTION
 };
 
 // Initializes common flags.
 
-template <typename network_t>
-const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_SYN_FLAGS(0, 0, 0, 0, 1 /* SYN */, 0);
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::flags_t
+tcp_t<network_t, alloc_t>::_SYN_FLAGS(0, 0, 0, 0, 1 /* SYN */, 0);
 
-template <typename network_t>
-const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_SYN_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 1 /* SYN */, 0);
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::flags_t
+tcp_t<network_t, alloc_t>::_SYN_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 1 /* SYN */, 0);
 
-template <typename network_t>
-const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_FIN_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 0, 1 /* FIN */);
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::flags_t
+tcp_t<network_t, alloc_t>::_FIN_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 0, 1 /* FIN */);
 
-template <typename network_t>
-const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 0, 0);
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::flags_t
+tcp_t<network_t, alloc_t>::_ACK_FLAGS(0, 1 /* ACK */, 0, 0, 0, 0);
 
-template <typename network_t>
-const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_RST_FLAGS(0, 0, 0, 1 /* RST */, 0, 0);
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::flags_t
+tcp_t<network_t, alloc_t>::_RST_FLAGS(0, 0, 0, 1 /* RST */, 0, 0);
 
-template <typename network_t>
-const typename tcp_t<network_t>::flags_t
-tcp_t<network_t>::_RST_ACK_FLAGS(0, 1 /* ACK */, 0, 1 /* RST */, 0, 0);
+template <typename network_t, typename alloc_t>
+const typename tcp_t<network_t, alloc_t>::flags_t
+tcp_t<network_t, alloc_t>::_RST_ACK_FLAGS(0, 1 /* ACK */, 0, 1 /* RST */, 0, 0);
 
 // Defines static methods.
 
-template <typename network_t>
-typename tcp_t<network_t>::cursor_t
-tcp_t<network_t>::_write_header(
+template <typename network_t, typename alloc_t>
+typename tcp_t<network_t, alloc_t>::cursor_t
+tcp_t<network_t, alloc_t>::_write_header(
     cursor_t cursor, net_t<port_t> sport, net_t<port_t> dport,
     net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags, net_t<uint16_t> window,
     size_t options_size, partial_sum_t partial_sum
@@ -2310,9 +2350,9 @@ tcp_t<network_t>::_write_header(
     });
 }
 
-template <typename network_t>
-typename tcp_t<network_t>::options_t
-tcp_t<network_t>::_parse_options(
+template <typename network_t, typename alloc_t>
+typename tcp_t<network_t, alloc_t>::options_t
+tcp_t<network_t, alloc_t>::_parse_options(
     const header_t *hdr, cursor_t *payload, _parse_options_status_t *status
 )
 {
@@ -2388,9 +2428,9 @@ tcp_t<network_t>::_parse_options(
     return options;
 }
 
-template <typename network_t>
-tuple<typename tcp_t<network_t>::cursor_t, partial_sum_t, size_t>
-tcp_t<network_t>::_write_options(cursor_t cursor, options_t options)
+template <typename network_t, typename alloc_t>
+tuple<typename tcp_t<network_t, alloc_t>::cursor_t, partial_sum_t, size_t>
+tcp_t<network_t, alloc_t>::_write_options(cursor_t cursor, options_t options)
 {
     if (options.mss != options_t::NO_MSS_OPTION) {
         partial_sum_t partial_sum;
@@ -2411,9 +2451,9 @@ tcp_t<network_t>::_write_options(cursor_t cursor, options_t options)
         return make_tuple(cursor, partial_sum_t::ZERO, 0);
 }
 
-template <typename network_t>
-inline typename tcp_t<network_t>::seq_t
-tcp_t<network_t>::_get_current_tcp_seq(void)
+template <typename network_t, typename alloc_t>
+inline typename tcp_t<network_t, alloc_t>::seq_t
+tcp_t<network_t, alloc_t>::_get_current_tcp_seq(void)
 {
     return network_t::data_link_t::phys_t::get_current_tcp_seq();
 }

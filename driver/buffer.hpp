@@ -82,9 +82,11 @@ struct cursor_t {
     // calling 'gxio_mpipe_push_buffer_bdesc()'.
     //
     // Complexity: O(n) where 'n' is the number of buffer descriptors in the
-    // chain. 
+    // chain.
+    template <typename alloc_t = allocator<char *>>
     inline cursor_t(
-        gxio_mpipe_context_t *context, gxio_mpipe_idesc_t *idesc, bool managed
+        gxio_mpipe_context_t *context, gxio_mpipe_idesc_t *idesc, bool managed,
+        alloc_t alloc = alloc_t()
     )
     {
         // gxio_mpipe_idesc_to_bdesc() seems to be broken on MDE v4.3.2.
@@ -94,7 +96,7 @@ struct cursor_t {
 
         size_t total_size = gxio_mpipe_idesc_get_xfer_size(idesc);
 
-        _init_with_bdesc(context, &edesc, total_size, managed);
+        _init_with_bdesc(context, &edesc, total_size, managed, alloc);
     }
 
     // Creates a buffer's cursor from a (possibly chained) buffer descriptor.
@@ -104,12 +106,13 @@ struct cursor_t {
     //
     // Complexity: O(n) where 'n' is the number of buffer descriptors in the
     // chain.
+    template <typename alloc_t = allocator<char *>>
     inline cursor_t(
         gxio_mpipe_context_t *context, gxio_mpipe_bdesc_t *bdesc,
-        size_t total_size, bool managed
+        size_t total_size, bool managed, alloc_t alloc = alloc_t()
     )
     {
-        _init_with_bdesc(context, bdesc, total_size, managed);
+        _init_with_bdesc(context, bdesc, total_size, managed, alloc);
     }
 
     // Returns the total number of remaining bytes.
@@ -556,9 +559,12 @@ private:
 
     // Complexity: O(n) where 'n' is the number of buffer descriptors in the
     // chain.
+    //
+    // The allocator is used to allocate the 'shared_ptr'.
+    template <typename alloc_t = allocator<char *>>
     void _init_with_bdesc(
         gxio_mpipe_context_t *context, gxio_mpipe_bdesc_t *bdesc,
-        size_t total_size, bool managed
+        size_t total_size, bool managed, alloc_t alloc = alloc_t()
     );
 
     // Returns a new cursor which references 'n' bytes after the cursor.
@@ -603,6 +609,74 @@ struct _buffer_desc_t {
             gxio_mpipe_push_buffer_bdesc(context, bdesc);
     }
 };
+
+template <typename alloc_t>
+void cursor_t::_init_with_bdesc(
+    gxio_mpipe_context_t *context, gxio_mpipe_bdesc_t *bdesc, size_t total_size,
+    bool is_managed, alloc_t alloc
+)
+{
+    // The end of the buffer chain could be reached because:
+    // 1) there is no buffer descriptor.
+    // 2) there is another buffer descriptor but we limited the number of bytes
+    //    we can use (this is used by slice methods such as 'take()').
+    // 3) the descriptor is invalid (last buffer in a chain).
+
+    if (
+           bdesc == nullptr || total_size == 0
+        || bdesc->c == MPIPE_EDMA_DESC_WORD1__C_VAL_INVALID
+    ) {
+        assert(total_size == 0);
+        *this = EMPTY;
+        return;
+    }
+
+    // Allocates a manageable buffer descriptor.
+    // desc = make_shared<_buffer_desc_t>(context, *bdesc, is_managed);
+    desc = allocate_shared<_buffer_desc_t>(alloc, context, *bdesc, is_managed);
+
+    // The last 42 bits of the buffer descriptor contain the virtual address of
+    // the buffer with the lower 7 bits being the offset of packet data inside
+    // this buffer.
+    //
+    // When the buffer is chained with other buffers, the next buffer descriptor
+    // is written in the first 8 bytes of the buffer and the offset is at least
+    // 8 bytes.
+
+    char    *va    = (char *) ((intptr_t) bdesc->va << 7);
+    size_t  offset = bdesc->__reserved_0;
+
+    current = va + offset;
+
+    #ifdef MPIPE_CHAINED_BUFFERS
+        size_t buffer_size = gxio_mpipe_buffer_size_enum_to_buffer_size(
+            (gxio_mpipe_buffer_size_enum_t) bdesc->size
+        );
+
+        switch (bdesc->c) {
+        case MPIPE_EDMA_DESC_WORD1__C_VAL_UNCHAINED:
+            assert(total_size <= buffer_size - offset);
+
+            current_size = total_size;
+            next         = nullptr;
+            next_size    = 0;
+            return;
+        case MPIPE_EDMA_DESC_WORD1__C_VAL_CHAINED:
+            current_size = min(total_size, buffer_size - offset);
+            next_size    = total_size - current_size;
+            next         = make_shared<cursor_t>(
+                context, (gxio_mpipe_bdesc_t *) va, next_size, is_managed
+            );
+            return;
+        default:
+            DRIVER_DIE("Invalid buffer descriptor");
+        };
+    #else
+        assert(bdesc->c == MPIPE_EDMA_DESC_WORD1__C_VAL_UNCHAINED);
+
+        current_size = total_size;
+    #endif /* MPIPE_CHAINED_BUFFERS */
+}
 
 } } } /* namespace tcp_mpipe::driver:buffer */
 

@@ -23,7 +23,8 @@
 #define __TCP_MPIPE_DRIVER_TIMER_HPP__
 
 #include <cstdint>
-#include <functional>
+#include <functional>       // less
+#include <memory>           // allocator
 #include <map>
 #include <unordered_map>
 
@@ -44,13 +45,14 @@ namespace timer {
 // The manager is *not* thread-safe. Users must avoid concurrent calls to
 // 'tick()', 'schedule()' and 'remove()'. Calling 'schedule()' or 'remove()'
 // within a timer should be safe.
+template <typename alloc_t = allocator<char *>>
 struct timer_manager_t {
     //
     // Member types
     //
 
     // Timer delay in microseconds (10^-6).
-    typedef uint64_t                        delay_t;
+    typedef uint64_t                                    delay_t;
 
     // Timers are stored by the cycle counter value for which they will expire.
     //
@@ -64,11 +66,13 @@ struct timer_manager_t {
     // and the execution of the first timer will take more than one cycle. This
     // simplifies the implementation and makes it more efficient than a vector
     // of timers which requires numerous dynamic memory allocations.
-    typedef map<cycles_t, function<void()>> timers_t;
+    typedef map<
+                cycles_t, function<void()>, less<cycles_t>, alloc_t
+            >                                           timers_t;
 
     // The 'destroy()' method uses the timer expiration date to retrieve and
     // remove a timer.
-    typedef cycles_t                        timer_id_t;
+    typedef cycles_t                                    timer_id_t;
 
     //
     // Fields
@@ -79,6 +83,8 @@ struct timer_manager_t {
     //
     // Methods
     //
+
+    timer_manager_t(alloc_t _alloc = alloc_t());
 
     // Executes expired timers. This method should be called periodically.
     void tick(void);
@@ -102,6 +108,97 @@ private:
     // Sames as 'schedule' but doesn't produce a log message.
     timer_id_t _insert(delay_t delay, function<void()> f);
 };
+
+template <typename alloc_t>
+timer_manager_t<alloc_t>::timer_manager_t(alloc_t _alloc)
+    : timers(less<cycles_t>(), _alloc)
+{
+}
+
+template <typename alloc_t>
+void timer_manager_t<alloc_t>::tick(void)
+{
+    typename timers_t::const_iterator it;
+
+    while ((it = timers.begin()) != timers.end()) {
+        // Removes the timer before calling it as some callbacks could make
+        // calls to 'schedule()' or 'remove()' and change the 'timers' member
+        // field.
+        // Similarly, the loop call 'timers.begin()' at each iteration as the
+        // iterator could be invalidated.
+
+        cycles_t current_count = get_cycle_count();
+        if (it->first > current_count)
+            break;
+
+        DRIVER_DEBUG("Executes timer %" PRIu64, it->first);
+
+        function<void(void)> f = move(it->second);
+        timers.erase(it);
+
+        f(); // Could invalidate 'it'.
+    }
+}
+
+template <typename alloc_t>
+typename timer_manager_t<alloc_t>::timer_id_t
+timer_manager_t<alloc_t>::schedule(delay_t delay, function<void()> f)
+{
+    timer_id_t timer_id = this->_insert(delay, f);
+
+    DRIVER_DEBUG(
+        "Schedules timer %" PRIu64 " with a %" PRIu64 " µs delay", timer_id,
+        delay
+    );
+
+    return timer_id;
+}
+
+template <typename alloc_t>
+typename timer_manager_t<alloc_t>::timer_id_t
+timer_manager_t<alloc_t>::reschedule(timer_id_t timer_id, delay_t new_delay)
+{
+    auto it = timers.find(timer_id);
+    assert(it != timers.end());
+
+    timer_id_t new_timer_id = _insert(new_delay, it->second);
+
+    timers.erase(timer_id);
+
+    DRIVER_DEBUG(
+        "Reschedules timer %" PRIu64 " as %" PRIu64 " with a %" PRIu64
+        " µs delay", timer_id, new_timer_id, new_delay
+    );
+
+    return new_timer_id;
+}
+
+template <typename alloc_t>
+bool timer_manager_t<alloc_t>::remove(timer_id_t timer_id)
+{
+    DRIVER_DEBUG("Unschedules timer %" PRIu64, timer_id);
+
+    return timers.erase(timer_id);
+}
+
+template <typename alloc_t>
+typename timer_manager_t<alloc_t>::timer_id_t
+timer_manager_t<alloc_t>::_insert(delay_t delay, function<void()> f)
+{
+    cycles_t expire = get_cycle_count() + CYCLES_PER_SECOND * delay / 1000000;
+
+    insert:
+    {
+        auto inserted = timers.emplace(expire, f);
+
+        if (UNLIKELY(!inserted.second)) {
+            expire++;
+            goto insert;
+        }
+    }
+
+    return expire;
+}
 
 } } } /* namespace tcp_mpipe::driver::timer */
 

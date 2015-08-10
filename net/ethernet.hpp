@@ -48,7 +48,7 @@ static const net_t<uint16_t> ETHERTYPE_IP_NET  = ETHERTYPE_IP;
 
 // Ethernet layer able to process frames from and to the specified physical
 // 'phys_var_t' layer.
-template <typename phys_var_t>
+template <typename phys_var_t, typename alloc_t = allocator<char *>>
 struct ethernet_t {
     //
     // Member types
@@ -58,7 +58,7 @@ struct ethernet_t {
     // type.
     typedef phys_var_t                          phys_t;
 
-    typedef ethernet_t<phys_t>                  this_t;
+    typedef ethernet_t<phys_t, alloc_t>         this_t;
 
     typedef typename phys_t::cursor_t           cursor_t;
     typedef typename phys_t::timer_manager_t    timer_manager_t;
@@ -100,8 +100,8 @@ struct ethernet_t {
     } __attribute__ ((__packed__));
 
     // Upper network layers types.
-    typedef ipv4_t<this_t>                  ipv4_ethernet_t;
-    typedef arp_t<this_t, ipv4_ethernet_t>  arp_ethernet_ipv4_t;
+    typedef ipv4_t<this_t, alloc_t>                 ipv4_ethernet_t;
+    typedef arp_t<this_t, ipv4_ethernet_t, alloc_t> arp_ethernet_ipv4_t;
 
     //
     // Static fields
@@ -126,7 +126,7 @@ struct ethernet_t {
 
     // Upper network layer instances.
     arp_ethernet_ipv4_t             arp;
-    ipv4_t<ethernet_t<phys_t>>      ipv4;
+    ipv4_ethernet_t                 ipv4;
 
     // Maximum payload size. Doesn't change after intialization.
     size_t                          max_payload_size;
@@ -138,7 +138,7 @@ struct ethernet_t {
     // Creates an Ethernet environment without initializing it.
     //
     // One must call 'init()' before using any other method.
-    ethernet_t(void)
+    ethernet_t(alloc_t _alloc = alloc_t()) : arp(_alloc), ipv4(_alloc)
     {
     }
 
@@ -149,8 +149,9 @@ struct ethernet_t {
     // then calling 'init()'.
     ethernet_t(
         phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
-        net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
-    ) : phys(_phys), addr(_addr)
+        net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr,
+        alloc_t _alloc = alloc_t()
+    ) : phys(_phys), addr(_addr), arp(_alloc), ipv4(_alloc)
     {
         max_payload_size = _max_payload_size();
         arp.init(this, _timers, &ipv4);
@@ -297,9 +298,10 @@ private:
     }
 };
 
-template <typename phys_t>
-const net_t<typename ethernet_t<phys_t>::addr_t>
-ethernet_t<phys_t>::BROADCAST_ADDR = { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
+template <typename phys_t, typename alloc_t>
+const net_t<typename ethernet_t<phys_t, alloc_t>::addr_t>
+ethernet_t<phys_t, alloc_t>::BROADCAST_ADDR =
+    { { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF } };
 
 #undef ETH_COLOR
 #undef ETH_DEBUG

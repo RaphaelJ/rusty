@@ -21,12 +21,15 @@
 #ifndef __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__
 #define __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__
 
-#include <memory>
+#include <memory>           // shared_ptr
+#include <utility>          // forward
 
 #include <tmc/alloc.h>      // tmc_alloc_t, tmc_alloc_*
 #include <tmc/mspace.h>     // tmc_mspace_*
 
 #include "driver/driver.hpp"
+
+#include <execinfo.h>
 
 using namespace std;
 
@@ -46,12 +49,34 @@ namespace driver {
 // alive to be able to use allocated memories.
 template <typename T>
 struct tile_allocator_t {
-    typedef T value_type;
+    //
+    // Member types
+    //
+
+    typedef T           value_type;
+    typedef T*          pointer;
+    typedef const T*    const_pointer;
+    typedef T&          reference;
+    typedef const T&    const_reference;
+    typedef size_t      size_type;
+
+    template<class U>
+    struct rebind {
+        typedef tile_allocator_t<U> other;
+    };
+
+    //
+    // Member fields
+    //
 
     // Uses a 'shared_ptr' to the 'tmc_mspace' with a destructor which frees the
     // memory space once no more 'tile_allocator_t' are referencing it.
 
     shared_ptr<tmc_mspace> mspace;
+
+    //
+    // Methods
+    //
 
     // Creates an allocator which uses a tmc_alloc_t initialized with
     // TMC_ALLOC_INIT to allocate pages for the heap.
@@ -130,14 +155,35 @@ struct tile_allocator_t {
     // Allocator methods and operators.
     //
 
+    inline T* address(T& obj)
+    {
+        return &obj;
+    }
+
     inline T* allocate(size_t length)
     {
+        // DRIVER_DEBUG("allocate<%s>(%zu)", typeid (T).name(), length);
+
         return (T*) tmc_mspace_malloc(*mspace, length * sizeof (T));
     }
 
     inline void deallocate(T* ptr, size_t length)
     {
+        // DRIVER_DEBUG("deallocate<%s>(%zu)", typeid (T).name(), length);
+
         tmc_mspace_free(ptr);
+    }
+
+    template <typename U, typename ... Args>
+    void construct(U* p, Args&&... args)
+    {
+        new (p) U(forward<Args>(args) ...);
+    }
+
+    template <typename U>
+    void destroy(U* p)
+    {
+        p->~U();
     }
 
     friend inline bool operator==(
@@ -159,7 +205,7 @@ private:
     inline void _init_mspace(tmc_alloc_t *alloc)
     {
         mspace = shared_ptr<tmc_mspace>(new tmc_mspace, _free_mspace);
-        *mspace = tmc_mspace_create_special(0, TMC_MSPACE_SPINLOCK, alloc);
+        *mspace = tmc_mspace_create_special(0, 0, alloc);
     }
 
     static void _free_mspace(tmc_mspace *mspace)

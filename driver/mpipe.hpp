@@ -26,10 +26,12 @@
 
 #include <array>
 #include <vector>
+#include <memory>               // allocator
 
 #include <arch/cycle.h>         // get_cycle_count()
 #include <gxio/mpipe.h>         // gxio_mpipe_*, GXIO_MPIPE_*
 
+#include "driver/allocator.hpp" // tile_allocator_t
 #include "driver/buffer.hpp"    // cursor_t
 #include "driver/timer.hpp"     // timer_manager_t
 #include "net/endian.hpp"       // net_t
@@ -121,6 +123,13 @@ struct mpipe_t {
     // Member types
     //
 
+    #ifdef USE_TILE_ALLOCATOR
+        typedef tile_allocator_t<char *>                    alloc_t;
+    #else
+        // Uses the standard allocator.
+        typedef allocator<char *>                           alloc_t;
+    #endif /* USE_TILE_ALLOCATOR */
+
     // Each worker thread will be given an mPIPE instance.
     //
     // Each instance contains its own ingress queue. A unique egress queue is
@@ -132,32 +141,36 @@ struct mpipe_t {
 
         // Cursor which will abstract how the upper (Ethernet) layer will read
         // from and write to memory in mPIPE buffers.
-        typedef buffer::cursor_t                        cursor_t;
+        typedef buffer::cursor_t                cursor_t;
 
-        typedef timer::timer_manager_t                  timer_manager_t;
+        typedef timer::timer_manager_t<alloc_t> timer_manager_t;
 
         //
         // Fields
         //
 
-        mpipe_t                     *parent;
-        pthread_t                   thread;
+        mpipe_t                                 *parent;
+        pthread_t                               thread;
+
+        alloc_t                                 alloc;
 
         // Dataplane Tile dedicated to the execution of this worker.
-        int                         cpu_id;
+        int                                     cpu_id;
 
         // Ingres queue.
-        gxio_mpipe_iqueue_t         iqueue;
-        char                        *notif_ring_mem;
+        gxio_mpipe_iqueue_t                     iqueue;
+        char                                    *notif_ring_mem;
 
         // Upper Ethernet data-link layer.
-        net::ethernet_t<instance_t> ethernet;
+        net::ethernet_t<instance_t, alloc_t>    ethernet;
 
-        timer_manager_t             timers;
+        timer_manager_t                         timers;
 
         //
         // Methods
         //
+
+        instance_t(alloc_t _alloc);
 
         // Starts an infite polling loop on the ingress queue.
         //
@@ -180,7 +193,7 @@ struct mpipe_t {
 
         // Returns the current TCP sequence number.
         static inline
-        net::ethernet_t<instance_t>::ipv4_ethernet_t::tcp_ipv4_t::seq_t
+        net::ethernet_t<instance_t, alloc_t>::ipv4_ethernet_t::tcp_ipv4_t::seq_t
         get_current_tcp_seq(void);
 
     private:
@@ -196,7 +209,7 @@ struct mpipe_t {
     // This permits the user to refer to network layer types easily, (i.e.
     // 'mpipe_t::ipv4_t::addr_t' to refer to an IPv4 address).
 
-    typedef net::ethernet_t<instance_t>             ethernet_t;
+    typedef net::ethernet_t<instance_t, alloc_t>    ethernet_t;
     typedef mpipe_t::ethernet_t::ipv4_ethernet_t    ipv4_t;
     typedef mpipe_t::ipv4_t::tcp_ipv4_t             tcp_t;
 
@@ -225,8 +238,11 @@ struct mpipe_t {
     gxio_mpipe_context_t        context;
     gxio_mpipe_link_t           link;
 
-    // Workers instances
-    vector<instance_t>          instances;
+    // Workers instances.
+    //
+    // Instances are not directly stored in the vector as the will cache-homed
+    // on the Tile core that they run on.
+    vector<instance_t *>        instances;
 
     // Ingres queues
     unsigned int                notif_group_id; // Load balancer group.

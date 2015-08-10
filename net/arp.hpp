@@ -27,7 +27,7 @@
 #include <unordered_map>
 #include <vector>
 #include <tuple>            // piecewise_construct, forward_as_tuple()
-#include <utility>          // move()
+#include <utility>          // move(), pair
 
 #include <net/if_arp.h>     // ARPOP_REQUEST, ARPOP_REPLY
 
@@ -51,7 +51,8 @@ namespace net {
 static const net_t<uint16_t> ARPOP_REQUEST_NET = ARPOP_REQUEST;
 static const net_t<uint16_t> ARPOP_REPLY_NET   = ARPOP_REPLY;
 
-template <typename data_link_t, typename proto_t>
+template <typename data_link_t, typename proto_t
+        , typename alloc_t = allocator<char *>>
 struct arp_t {
     //
     // Member types
@@ -88,15 +89,41 @@ struct arp_t {
         timer_id_t              timer;
     };
 
+    // Types related to the 'addrs_cache' hash table.
+    typedef pair<const net_t<proto_addr_t>, cache_entry_t>
+                                                    addrs_cache_pair_t;
+    typedef typename alloc_t::template rebind<addrs_cache_pair_t>::other
+                                                    addrs_cache_alloc_t;
+    typedef unordered_map<
+                net_t<proto_addr_t>, cache_entry_t,
+                hash<net_t<proto_addr_t>>, equal_to<net_t<proto_addr_t>>,
+                addrs_cache_alloc_t
+            >                                       addrs_cache_t;
+
     // Callback used in the call of 'with_data_link_addr()'.
     typedef function<void(const net_t<data_link_addr_t> *)> callback_t;
 
     struct pending_entry_t {
-        vector<callback_t>  callbacks;
+        vector<callback_t, alloc_t> callbacks;
 
         // Timer which triggers the expiration of resolution.
-        timer_id_t          timer;
+        timer_id_t                  timer;
+
+        pending_entry_t(alloc_t _alloc = alloc_t()) : callbacks(_alloc)
+        {
+        }
     };
+
+    // Types related to the 'pending_reqs' hash table.
+    typedef pair<const net_t<proto_addr_t>, pending_entry_t>
+                                                    pending_reqs_pair_t;
+    typedef typename alloc_t::template rebind<pending_reqs_pair_t>::other
+                                                    pending_reqs_alloc_t;
+    typedef unordered_map<
+                net_t<proto_addr_t>, pending_entry_t,
+                hash<net_t<proto_addr_t>>, equal_to<net_t<proto_addr_t>>,
+                pending_reqs_alloc_t
+            >                                       pending_reqs_t;
 
     //
     // Static fields
@@ -129,7 +156,7 @@ struct arp_t {
     //
     // The set of known protocol addresses is disjoint with the set of addresses
     // in 'pending_reqs'.
-    unordered_map<net_t<proto_addr_t>, cache_entry_t>   addrs_cache;
+    addrs_cache_t           addrs_cache;
 
     // Contains a mapping of protocol addresses for which an ARP request has
     // been broadcasted but no response has been received yet.
@@ -138,7 +165,7 @@ struct arp_t {
     //
     // The set of pending protocol addresses is disjoint with the set of
     // addresses in 'addrs_cache'.
-    unordered_map<net_t<proto_addr_t>, pending_entry_t> pending_reqs;
+    pending_reqs_t          pending_reqs;
 
     //
     // Methods
@@ -147,7 +174,15 @@ struct arp_t {
     // Creates an ARP environment without initializing it.
     //
     // One must call 'init()' before using any other method.
-    arp_t(void)
+    arp_t(alloc_t _alloc = alloc_t())
+      : addrs_cache(
+            0, hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(),
+            _alloc
+        ),
+        pending_reqs(
+            0, hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(),
+            _alloc
+        )
     {
     }
 
@@ -156,8 +191,18 @@ struct arp_t {
     //
     // Does the same thing as creating the environment with 'arp_t()' and then
     // calling 'init()'.
-    arp_t(data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto)
-        : data_link(_data_link), timers(_timers), proto(_proto)
+    arp_t(
+        data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto,
+        alloc_t _alloc = alloc_t()
+    ) : data_link(_data_link), timers(_timers), proto(_proto),
+        addrs_cache(
+            0, hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(),
+            _alloc
+        ),
+        pending_reqs(
+            0, hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(),
+            _alloc
+        )
     {
     }
 
@@ -167,9 +212,9 @@ struct arp_t {
         data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto
     )
     {
-        data_link = _data_link;
-        timers    = _timers;
-        proto     = _proto;
+        data_link   = _data_link;
+        timers      = _timers;
+        proto       = _proto;
     }
 
     // Processes an ARP message wich starts at the given cursor (data-link frame
@@ -333,11 +378,11 @@ struct arp_t {
         
         return true;
         
-        // NOTE: this procedure should require an exclusive lock for addrs_cache
-        // and pending_reqs in case of multiple threads executing it.
-
-        // lock
-
+//         // NOTE: this procedure should require an exclusive lock for addrs_cache
+//         // and pending_reqs in case of multiple threads executing it.
+// 
+//         // lock
+// 
 //         auto it_cache = this->addrs_cache.find(proto_addr);
 // 
 //         if (it_cache != this->addrs_cache.end()) {
@@ -370,7 +415,8 @@ struct arp_t {
 // 
 //                 auto p = this->pending_reqs.emplace(
 //                     piecewise_construct,
-//                     forward_as_tuple(proto_addr), forward_as_tuple()
+//                     forward_as_tuple(proto_addr),
+//                     forward_as_tuple(this->pending_reqs.get_allocator())
 //                 );
 //                 assert(p.second); // Emplace succeed.
 //                 pending_entry_t *entry = &p.first->second;
@@ -478,7 +524,9 @@ private:
                 // deadlock, we must first remove the pending requests entry and
                 // free the lock before calling any callback.
 
-                vector<callback_t> callbacks = move(pending_entry->callbacks);
+                vector<callback_t, alloc_t> callbacks = move(
+                    pending_entry->callbacks
+                );
                 this->pending_reqs.erase(it);
 
                 // unlock

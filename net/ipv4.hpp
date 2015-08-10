@@ -92,7 +92,7 @@ struct ipv4_addr_t {
 
 // IPv4 network layer able to process datagram from and to the specified
 // data-link 'data_link_var_t' layer.
-template <typename data_link_var_t>
+template <typename data_link_var_t, typename alloc_t = allocator<char *>>
 struct ipv4_t {
     //
     // Member types
@@ -102,7 +102,7 @@ struct ipv4_t {
     // member type.
     typedef data_link_var_t                         data_link_t;
 
-    typedef ipv4_t<data_link_t>                     this_t;
+    typedef ipv4_t<data_link_t, alloc_t>            this_t;
 
     typedef ipv4_addr_t                             addr_t;
 
@@ -135,7 +135,7 @@ struct ipv4_t {
     typedef typename data_link_t::addr_t            data_link_addr_t;
 
     // Upper layer protocol type.
-    typedef tcp_t<this_t>                           tcp_ipv4_t;
+    typedef tcp_t<this_t, alloc_t>                  tcp_ipv4_t;
 
     //
     // Static fields
@@ -155,22 +155,22 @@ struct ipv4_t {
     //
 
     // Lower network layer instances.
-    data_link_t                 *data_link;
-    arp_t<data_link_t, this_t>  *arp;
+    data_link_t                         *data_link;
+    arp_t<data_link_t, this_t, alloc_t> *arp;
 
     // Upper protocol instances
-    tcp_t<this_t>               tcp;
+    tcp_ipv4_t                          tcp;
 
     // Instance's IPv4 address
-    net_t<addr_t>               addr;
+    net_t<addr_t>                       addr;
 
     // Maximum payload size. Doesn't change after intialization.
-    size_t                      max_payload_size;
+    size_t                              max_payload_size;
 
     // The current identification number used to indentify egressed datagrams.
     //
     // This counter is incremented by one each time a datagram is sent.
-    uint16_t                    current_datagram_id = 0;
+    uint16_t                            current_datagram_id = 0;
 
     //
     // Methods
@@ -179,7 +179,7 @@ struct ipv4_t {
     // Creates an IPv4 environment without initializing it.
     //
     // One must call 'init()' before using any other method.
-    ipv4_t(void)
+    ipv4_t(alloc_t _alloc = alloc_t()) : tcp(_alloc)
     {
     }
 
@@ -189,9 +189,10 @@ struct ipv4_t {
     // Does the same thing as creating the environment with 'ipv4_t()' and then
     // calling 'init()'.
     ipv4_t(
-        data_link_t *_data_link, arp_t<data_link_t, this_t> *_arp,
-        net_t<addr_t> _addr, timer_manager_t *_timers
-    ) : data_link(_data_link), arp(_arp), addr(_addr)
+        data_link_t *_data_link, arp_t<data_link_t, this_t, alloc_t> *_arp,
+        net_t<addr_t> _addr, timer_manager_t *_timers,
+        alloc_t _alloc = alloc_t()
+    ) : data_link(_data_link), arp(_arp), addr(_addr), tcp(_alloc)
     {
         // TCP must be initialized after max_payload_size
         max_payload_size = this->_max_payload_size();
@@ -201,7 +202,7 @@ struct ipv4_t {
     // Initializes an IPv4 environment for the given data-link layer instance
     // and IPv4 address).
     void init(
-        data_link_t *_data_link, arp_t<data_link_t, this_t> *_arp,
+        data_link_t *_data_link, arp_t<data_link_t, this_t, alloc_t> *_arp,
         net_t<addr_t> _addr, timer_manager_t *_timers
     )
     {
