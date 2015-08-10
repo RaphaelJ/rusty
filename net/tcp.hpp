@@ -861,8 +861,6 @@ struct tcp_t {
                     this->_handle_closed_state(saddr, hdr, payload);
             } else {
                 tcb_t *tcb = &tcb_it->second;
-                
-                
 
                 if (tcb->in_state(tcb_t::SYN_SENT)) {
                     this->_handle_syn_sent_state(
@@ -1850,7 +1848,7 @@ private:
     // Sends a FIN/ACK segment with a payload.
     //
     // <SEQ=seq><ACK=ack><CTL=FIN,ACK><payload>
-    void _send_fin_ack_segment(
+    inline void _send_fin_ack_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack,
         function<partial_sum_t(cursor_t)> payload_writer, size_t payload_size
@@ -1866,7 +1864,7 @@ private:
     // Sends an ACK segment with a payload.
     //
     // <SEQ=seq><ACK=ack><CTL=ACK><payload>
-    void _send_ack_segment(
+    inline void _send_ack_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         const tcb_t *tcb, net_t<seq_t> seq, net_t<seq_t> ack,
         function<partial_sum_t(cursor_t)> payload_writer, size_t payload_size
@@ -2144,7 +2142,7 @@ private:
     }
 
     // Pushes the given segment with its payload to the network layer.
-    void _send_segment(
+    inline void _send_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
         net_t<win_size_t> window, options_t options,
@@ -2192,7 +2190,7 @@ private:
     }
 
     // Pushes the given segment with an empty payload to the network layer.
-    void _send_segment(
+    inline void _send_segment(
         net_t<port_t> sport, net_t<addr_t> daddr, net_t<port_t> dport,
         net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
         net_t<win_size_t> window, options_t options

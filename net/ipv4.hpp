@@ -353,7 +353,7 @@ struct ipv4_t {
     //
     // This method is typically called by the TCP instance when it wants to
     // send a TCP segment.
-    void send_tcp_payload(
+    inline void send_tcp_payload(
         net_t<addr_t> dst, size_t payload_size,
         function<void(cursor_t)> payload_writer
     )

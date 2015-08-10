@@ -170,9 +170,9 @@ uint16_t _ones_complement_sum(const void *data, size_t size)
     }
 
     // 16 bits ones' complement sums of the two sub-sums and the carry bits.
-    do {
+    do
         sum = (sum >> 16) + (sum & 0xFFFF);
-    } while (sum >> 16);
+    while (sum >> 16);
 
     // If data started on an odd address, we computed the wrong sum. We computed
     // [0, a] +' [b, c] +' ... instead of [a, b] +' [c, d] +' ...

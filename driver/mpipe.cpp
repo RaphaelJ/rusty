@@ -56,6 +56,8 @@ namespace driver {
 // environment (in network byte order).
 static net_t<mpipe_t::ethernet_t::addr_t> _ether_addr(gxio_mpipe_link_t *link);
 
+static pthread_spinlock_t lock;
+
 void mpipe_t::instance_t::run(void)
 {
     int result;
@@ -144,6 +146,8 @@ mpipe_t::mpipe_t(
     const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers
 ) : instances(n_workers)
 {
+    pthread_spin_init(&lock, PTHREAD_PROCESS_PRIVATE);
+
     assert(n_workers > 0);
     assert((unsigned int) n_workers <= N_BUCKETS);
 
@@ -635,8 +639,20 @@ gxio_mpipe_bdesc_t mpipe_t::_alloc_buffer(size_t size)
 {
     // Finds the first buffer size large enough to hold the requested buffer.
     for (const buffer_stack_t &stack : this->buffer_stacks) {
-        if (stack.buffer_size >= size)
-            return gxio_mpipe_pop_buffer_bdesc(&this->context, stack.id);
+        if (stack.buffer_size >= size) {
+            gxio_mpipe_bdesc_t bdesc = gxio_mpipe_pop_buffer_bdesc(
+                &this->context, stack.id
+            );
+
+            if (UNLIKELY(bdesc.c == MPIPE_EDMA_DESC_WORD1__C_VAL_INVALID)) {
+                DRIVER_DIE(
+                    "Invalid buffer descriptor (size %zu). "
+                    "Maybe you should allocate more buffers.", stack.buffer_size
+                );
+            }
+
+            return bdesc;
+        }
     }
 
     // TODO: build a chained buffer if possible.

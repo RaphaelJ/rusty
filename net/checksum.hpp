@@ -118,6 +118,12 @@ struct partial_sum_t {
 //
 // Once computed from a data buffer, the precomputed table can gives in constant
 // time the one's complement sum of any subsection of the buffer.
+//
+// It uses internally a kind of summed area table [1] instead of computing the
+// sum for every possible sub-section, giving a O(n) memory space usage (with n
+// being the number of bytes in the original buffer).
+//
+// [1] https://en.wikipedia.org/wiki/Summed_area_table
 struct precomputed_sums_t {
     const void      *data;
     const size_t    size;

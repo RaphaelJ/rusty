@@ -255,7 +255,7 @@ struct ethernet_t {
     //
     // This method is typically called by the ARP instance when it wants to send
     // a message.
-    void send_arp_payload(
+    inline void send_arp_payload(
         net_t<addr_t> dst, size_t payload_size,
         function<void(cursor_t)> payload_writer
     )
@@ -268,7 +268,7 @@ struct ethernet_t {
     //
     // This method is typically called by the IPv4 instance when it wants to
     // send a packet.
-    void send_ip_payload(
+    inline void send_ip_payload(
         net_t<addr_t> dst, size_t payload_size,
         function<void(cursor_t)> payload_writer
     )
@@ -284,7 +284,7 @@ private:
     )
     {
         return cursor.template write_with<header_t >(
-        [this, dst, ether_type](header_t *hdr) {
+        [this, dst, ether_type, cursor](header_t *hdr) {
             hdr->dhost = dst;
             hdr->shost = addr;
             hdr->type  = ether_type;

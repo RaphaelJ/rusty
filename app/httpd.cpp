@@ -1,7 +1,7 @@
 //
 // Very simple HTTP server. Preload files from the given directory.
 //
-// Usage: ./app/httpd <link> <ipv4> <TCP port> <root dir>
+// Usage: ./app/httpd <link> <ipv4> <TCP port> <root dir> <n workers>
 //
 // Copyright 2015 Raphael Javaux <raphaeljavaux@gmail.com>
 // University of Liege.
@@ -23,7 +23,8 @@
 #include <algorithm>            // min()
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>              // strtok()
+#include <cstring>
+#include <unordered_map>
 
 #include <alloca.h>             // alloca()
 #include <dirent.h>             // struct dirent, opendir(), readdir()
@@ -143,8 +144,6 @@ int main(int argc, char **argv)
     if (!_parse_args(argc, argv, &args))
         return EXIT_FAILURE;
 
-    cpu::bind_to_dataplane(0);
-
     mpipe_t mpipe(args.link_name, args.ipv4_addr, args.n_workers);
 
     unordered_map<filename_t, file_t> files { };
@@ -163,7 +162,7 @@ int main(int argc, char **argv)
         args.tcp_port,
 
         // On new connections.
-        [&files] (mpipe_t::tcp_t::conn_t conn)
+        [&files](mpipe_t::tcp_t::conn_t conn)
         {
             HTTPD_DEBUG(
                 "New connection from %s:%" PRIu16 " on port %" PRIu16,
@@ -404,11 +403,11 @@ void _respond_with_200(mpipe_t::tcp_t::conn_t conn, const file_t *file)
 
             // Writes the HTTP header if required.
             if (offset < header_len) {
-                tmc_mem_prefetch(header, sizeof header);
+                tmc_mem_prefetch(header, sizeof (header));
 
                 char buffer[header_len + 1];
 
-                snprintf(buffer, sizeof buffer, header, file->content_len);
+                snprintf(buffer, sizeof (buffer), header, file->content_len);
 
                 size_t to_write = min(out.size(), header_len - offset);
 
@@ -427,11 +426,11 @@ void _respond_with_200(mpipe_t::tcp_t::conn_t conn, const file_t *file)
             }
 
             size_t out_size     = out.size();
-            size_t content_end  = content_offset + out_size;
 
             tmc_mem_prefetch(file->content + content_offset, out_size);
 
             #ifdef USE_PRECOMPUTED_CHECKSUMS
+                size_t content_end  = content_offset + out_size;
                 file->precomputed_sums.prefetch(content_offset, content_end);
             #endif /* USE_PRECOMPUTED_CHECKSUMS */
 
