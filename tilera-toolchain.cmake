@@ -1,0 +1,20 @@
+SET(CMAKE_SYSTEM_NAME    Linux)
+SET(CMAKE_SYSTEM_VERSION 1)
+
+SET(CMAKE_C_COMPILER     $ENV{TILERA_ROOT}/bin/tile-gcc48)
+SET(CMAKE_CXX_COMPILER 	 $ENV{TILERA_ROOT}/bin/tile-g++48)
+
+SET(CMAKE_FIND_ROOT_PATH $ENV{TILERA_ROOT}/tile)
+
+MESSAGE("Use ${CMAKE_FIND_ROOT_PATH} as a building root")
+
+# Doesn't search for programs in the target root
+SET(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+
+# Only searches libraries and includes in the targer root
+SET(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+
+SET(ENV{PKG_CONFIG_SYSROOT_DIR} $ENV{TILERA_ROOT}/tile)
+SET(ENV{PKG_CONFIG_LIBDIR}      $ENV{TILERA_ROOT}/tile/usr/lib/pkgconfig:$ENV{TILERA_ROOT}/tile/lib/pkgconfig)
+
