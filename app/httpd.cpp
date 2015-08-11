@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 
 #include <alloca.h>             // alloca()
 #include <dirent.h>             // struct dirent, opendir(), readdir()
@@ -35,6 +36,7 @@
 #include "driver/cpu.hpp"
 #include "driver/mpipe.hpp"
 #include "net/checksum.hpp"     // partial_sum_t, precomputed_sums_t
+#include "net/endian.hpp"       // net_t
 #include "util/macros.hpp"      // LIKELY(), UNLIKELY
 
 using namespace std;
@@ -43,6 +45,17 @@ using namespace tcp_mpipe::driver;
 using namespace tcp_mpipe::net;
 
 #define USE_PRECOMPUTED_CHECKSUMS
+
+static mpipe_t::arp_ipv4_t::static_entry_t
+_static_arp_entry(const char *ipv4_addr_char, const char *ether_addr_char);
+
+static vector<mpipe_t::arp_ipv4_t::static_entry_t> static_arp_entries {
+    // eth2 frodo.run.montefiore.ulg.ac.be
+    _static_arp_entry("10.0.2.1", "90:e2:ba:46:f2:d4"),
+
+    // eth3 frodo.run.montefiore.ulg.ac.be
+    _static_arp_entry("10.0.3.1", "90:e2:ba:46:f2:d5")
+};
 
 #define HTTPD_COLOR     COLOR_GRN
 #define HTTPD_DEBUG(MSG, ...)                                                  \
@@ -54,11 +67,15 @@ using namespace tcp_mpipe::net;
 
 // Parsed CLI arguments.
 struct args_t {
-    char                            *link_name;
-    net_t<mpipe_t::ipv4_t::addr_t>  ipv4_addr;
+    struct interface_t {
+        char                            *link_name;
+        net_t<mpipe_t::ipv4_t::addr_t>  ipv4_addr;
+        size_t                          n_workers;
+    };
+
     mpipe_t::tcp_t::port_t          tcp_port;
     char                            *root_dir;
-    size_t                          n_workers;
+    vector<interface_t>             interfaces;
 };
 
 // Type used to index file by their filename. Different from 'std::string', so
@@ -144,24 +161,14 @@ int main(int argc, char **argv)
     if (!_parse_args(argc, argv, &args))
         return EXIT_FAILURE;
 
-    mpipe_t mpipe(args.link_name, args.ipv4_addr, args.n_workers);
-
     unordered_map<filename_t, file_t> files { };
     _preload_files(&files, args.root_dir);
 
-    HTTPD_DEBUG(
-        "Starts the HTTP server on interface %s (%s) with %s as IPv4 address "
-        "on port %d serving %s",
-        args.link_name,
-        mpipe_t::ethernet_t::addr_t::to_alpha(mpipe.ether_addr),
-        mpipe_t::ipv4_t::addr_t::to_alpha(args.ipv4_addr), args.tcp_port,
-        args.root_dir
-    );
+    //
+    // Handler executed on new connections.
+    //
 
-    mpipe.tcp_listen(
-        args.tcp_port,
-
-        // On new connections.
+    auto on_new_connection =
         [&files](mpipe_t::tcp_t::conn_t conn)
         {
             HTTPD_DEBUG(
@@ -191,45 +198,111 @@ int main(int argc, char **argv)
             handlers.reset = _do_nothing;
 
             return handlers;
-        }
-    );
+        };
 
-    // Runs the application.
-    mpipe.run();
+    //
+    // Starts an mpipe instance for each interface.
+    //
+
+    vector<mpipe_t> instances;
+    instances.reserve(args.interfaces.size());
+
+    int first_dataplane_cpu = 0;
+    for (args_t::interface_t &interface : args.interfaces) {
+        instances.emplace_back(
+            interface.link_name, interface.ipv4_addr, interface.n_workers,
+            first_dataplane_cpu, static_arp_entries
+        );
+
+        mpipe_t &mpipe = instances.back();
+
+        HTTPD_DEBUG(
+            "Starts the HTTP server on interface %s (%s) with %s as IPv4 "
+            "address on port %d serving %s",
+            interface.link_name,
+            mpipe_t::ethernet_t::addr_t::to_alpha(mpipe.ether_addr),
+            mpipe_t::ipv4_t::addr_t::to_alpha(interface.link_name), 
+            args.tcp_port, args.root_dir
+        );
+
+        mpipe.tcp_listen(args.tcp_port, on_new_connection);
+
+        mpipe.run();
+
+        first_dataplane_cpu += interface.n_workers;
+    }
+
+    // Wait for all instances to finish (will not happen).
+    for (mpipe_t &mpipe_instance : instances)
+        mpipe_instance.join();
 
     return EXIT_SUCCESS;
+}
+
+static mpipe_t::arp_ipv4_t::static_entry_t
+_static_arp_entry(const char *ipv4_addr_char, const char *ether_addr_char)
+{
+    struct in_addr ipv4_addr;
+    if (inet_aton(ipv4_addr_char, &ipv4_addr) != 1)
+        HTTPD_DIE("Invalid IPv4 address");
+
+    struct ether_addr *ether_addr;
+    if ((ether_addr = ether_aton(ether_addr_char)) == nullptr)
+        HTTPD_DIE("Invalid Ethernet address");
+
+    return (mpipe_t::arp_ipv4_t::static_entry_t) {
+        mpipe_t::ipv4_t::addr_t::from_in_addr(ipv4_addr),
+        mpipe_t::ethernet_t::addr_t::from_ether_addr(ether_addr)
+    };
 }
 
 static void _print_usage(char **argv)
 {
     fprintf(
-        stderr, "Usage: %s <link> <ipv4> <TCP port> <root dir> <n workers>\n",
+        stderr,
+        "Usage: %s <TCP port> <root dir> <n links> "
+        "[<link> <ipv4 of this link> <n workers on this link>]...\n",
         argv[0]
     );
 }
 
 static bool _parse_args(int argc, char **argv, args_t *args)
 {
-    if (argc != 6) {
+    if (argc < 4) {
         _print_usage(argv);
         return false;
     }
 
-    args->link_name = argv[1];
+    args->tcp_port = atoi(argv[1]);
 
-    struct in_addr in_addr;
-    if (inet_aton(argv[2], &in_addr) != 1) {
-        fprintf(stderr, "Failed to parse the IPv4.\n");
+    args->root_dir = argv[2];
+
+    int n_links = atoi(argv[3]);
+
+    if (argc != 4 + n_links * 3){
         _print_usage(argv);
         return false;
     }
-    args->ipv4_addr = ipv4_addr_t::from_in_addr(in_addr);
 
-    args->tcp_port = atoi(argv[3]);
+    args->interfaces.reserve(n_links);
 
-    args->root_dir = argv[4];
+    for (int i = 0; i < n_links; i++) {
+        args_t::interface_t interface;
 
-    args->n_workers = atoi(argv[5]);
+        interface.link_name = argv[4 + 3 * i];
+
+        struct in_addr in_addr;
+        if (inet_aton(argv[5 + 3 * i], &in_addr) != 1) {
+            fprintf(stderr, "Failed to parse the IPv4.\n");
+            _print_usage(argv);
+            return false;
+        }
+        interface.ipv4_addr = ipv4_addr_t::from_in_addr(in_addr);
+
+        interface.n_workers = atoi(argv[6 + 3 * i]);
+
+        args->interfaces.push_back(interface);
+    }
 
     return true;
 }

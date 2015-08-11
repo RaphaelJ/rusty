@@ -136,6 +136,9 @@ int main(int argc, char **argv)
     // Runs the application.
     mpipe.run();
 
+    // Wait for the instance to finish (will not happen).
+    mpipe.join();
+
     return EXIT_SUCCESS;
 }
 

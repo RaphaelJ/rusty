@@ -28,6 +28,7 @@
 #include <vector>
 #include <tuple>            // piecewise_construct, forward_as_tuple()
 #include <utility>          // move(), pair
+#include <vector>
 
 #include <net/if_arp.h>     // ARPOP_REQUEST, ARPOP_REPLY
 
@@ -82,10 +83,20 @@ struct arp_t {
         net_t<proto_addr_t>        tpa;     // target protocol address
     } __attribute__((__packed__));
 
+    struct static_entry_t {
+        net_t<proto_addr_t>     proto_addr;
+        net_t<data_link_addr_t> data_link_addr;
+    };
+
     struct cache_entry_t {
         net_t<data_link_addr_t> addr;
 
+        // Static entries can not be removed.
+        bool                    is_static;
+
         // Timer which triggers the expiration of the entry.
+        //
+        // Undefined for static entries.
         timer_id_t              timer;
     };
 
@@ -193,28 +204,32 @@ struct arp_t {
     // calling 'init()'.
     arp_t(
         data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto,
+        vector<static_entry_t> static_entries = vector<static_entry_t>(),
         alloc_t _alloc = alloc_t()
     ) : data_link(_data_link), timers(_timers), proto(_proto),
         addrs_cache(
-            0, hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(),
-            _alloc
+            static_entries.size(),
+            hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(), _alloc
         ),
         pending_reqs(
             0, hash<net_t<proto_addr_t>>(), equal_to<net_t<proto_addr_t>>(),
             _alloc
         )
     {
+        _insert_static_entries(static_entries);
     }
 
     // Initializes an ARP environment for the given data-link and protocol layer
     // instances.ipv4
     void init(
-        data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto
+        data_link_t *_data_link, timer_manager_t *_timers, proto_t *_proto,
+        vector<static_entry_t> static_entries = vector<static_entry_t>()
     )
     {
         data_link   = _data_link;
         timers      = _timers;
         proto       = _proto;
+        _insert_static_entries(static_entries);
     }
 
     // Processes an ARP message wich starts at the given cursor (data-link frame
@@ -370,77 +385,80 @@ struct arp_t {
         net_t<proto_addr_t> proto_addr, callback_t callback
     )
     {
-        static net_t<data_link_addr_t> frodo = net_t<data_link_addr_t>::from_net(
-            { { 0x90, 0xe2, 0xba, 0x46, 0xf2, 0xd4 } }
-        );
+        // NOTE: this procedure should require an exclusive lock for addrs_cache
+        // and pending_reqs in case of multiple threads executing it.
 
-        callback(&frodo);
-        
-        return true;
-        
-//         // NOTE: this procedure should require an exclusive lock for addrs_cache
-//         // and pending_reqs in case of multiple threads executing it.
-// 
-//         // lock
-// 
-//         auto it_cache = this->addrs_cache.find(proto_addr);
-// 
-//         if (it_cache != this->addrs_cache.end()) {
-//             // Hardware address is cached.
-// 
-//             // unlock
-//             callback(&it_cache->second.addr);
-//             return true;
-//         } else {
-//             // Hardware address is NOT cached.
-//             //
-//             // Checks if a pending request exists for this address.
-// 
-//             auto it_pending = this->pending_reqs.find(proto_addr);
-// 
-//             if (it_pending != this->pending_reqs.end()) {
-//                 // The pending request entry already existed. A request has
-//                 // already been broadcasted for this protocol address.
-//                 //
-//                 // Simply adds the callback to the vector.
-// 
-//                 it_pending->second.callbacks.push_back(callback);
-// 
-//                 // unlock
-//             } else {
-//                 // No previous pending request entry.
-//                 //
-//                 // Creates the entry with a new timer and broadcasts an ARP
-//                 // request for this protocol address.
-// 
-//                 auto p = this->pending_reqs.emplace(
-//                     piecewise_construct,
-//                     forward_as_tuple(proto_addr),
-//                     forward_as_tuple(this->pending_reqs.get_allocator())
-//                 );
-//                 assert(p.second); // Emplace succeed.
-//                 pending_entry_t *entry = &p.first->second;
-// 
-//                 entry->callbacks.push_back(callback);
-// 
-//                 entry->timer = timers->schedule(
-//                     REQUEST_TIMEOUT, [this, proto_addr]() {
-//                         this->_remove_pending_request(proto_addr);
-//                     }
-//                 );
-// 
-//                 // unlock
-// 
-//                 this->send_message(
-//                     ARPOP_REQUEST_NET, data_link_t::BROADCAST_ADDR, proto_addr
-//                 );
-//             }
-// 
-//             return false;
-//         }
+        // lock
+
+        auto it_cache = this->addrs_cache.find(proto_addr);
+
+        if (it_cache != this->addrs_cache.end()) {
+            // Hardware address is cached.
+
+            // unlock
+            callback(&it_cache->second.addr);
+            return true;
+        } else {
+            // Hardware address is NOT cached.
+            //
+            // Checks if a pending request exists for this address.
+
+            auto it_pending = this->pending_reqs.find(proto_addr);
+
+            if (it_pending != this->pending_reqs.end()) {
+                // The pending request entry already existed. A request has
+                // already been broadcasted for this protocol address.
+                //
+                // Simply adds the callback to the vector.
+
+                it_pending->second.callbacks.push_back(callback);
+
+                // unlock
+            } else {
+                // No previous pending request entry.
+                //
+                // Creates the entry with a new timer and broadcasts an ARP
+                // request for this protocol address.
+
+                auto p = this->pending_reqs.emplace(
+                    piecewise_construct,
+                    forward_as_tuple(proto_addr),
+                    forward_as_tuple(this->pending_reqs.get_allocator())
+                );
+                assert(p.second); // Emplace succeed.
+                pending_entry_t *entry = &p.first->second;
+
+                entry->callbacks.push_back(callback);
+
+                entry->timer = timers->schedule(
+                    REQUEST_TIMEOUT, [this, proto_addr]() {
+                        this->_remove_pending_request(proto_addr);
+                    }
+                );
+
+                // unlock
+
+                this->send_message(
+                    ARPOP_REQUEST_NET, data_link_t::BROADCAST_ADDR, proto_addr
+                );
+            }
+
+            return false;
+        }
     }
 
 private:
+
+    void _insert_static_entries(vector<static_entry_t> static_entries)
+    {
+        for (static_entry_t static_entry : static_entries) {
+            cache_entry_t cache_entry;
+            cache_entry.addr        = static_entry.data_link_addr;
+            cache_entry.is_static   = true;
+
+            addrs_cache.emplace(static_entry.proto_addr, cache_entry);
+        }
+    }
 
     // Removes a pending entry for the given protocol address.
     //
@@ -475,14 +493,17 @@ private:
             }
         );
 
-        cache_entry_t entry { data_link_addr, timer_id };
+        cache_entry_t entry { data_link_addr, false, timer_id };
         auto inserted = this->addrs_cache.emplace(proto_addr, entry);
 
         if (!inserted.second) {
             // Address already in cache, replace the previous value if
-            // different.
+            // different and not static.
 
             cache_entry_t *inserted_entry = &inserted.first->second;
+
+            if (inserted_entry->is_static)
+                return;
 
             if (UNLIKELY(inserted_entry->addr != data_link_addr)) {
                 ARP_DEBUG(
@@ -556,9 +577,13 @@ private:
     // Doesn't unschedule the timer.
     void _remove_cache_entry(net_t<proto_addr_t> addr)
     {
+        // Does not remove a static entry.
+        assert(!this->addrs_cache.find(addr)->is_static);
+
         ARP_DEBUG(
             "Removes cache entry for %s", proto_t::addr_t::to_alpha(addr)
         );
+
         this->addrs_cache.erase(addr);
     }
 

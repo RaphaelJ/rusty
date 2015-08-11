@@ -150,7 +150,9 @@ void mpipe_t::instance_t::send_packet(
 // worker thread, the hardware load-balancer will classify packets by their flow
 // (IP addresses, ports, ...) by worker.
 mpipe_t::mpipe_t(
-    const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers
+    const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers,
+    int first_dataplane_cpu,
+    vector<arp_ipv4_t::static_entry_t> static_arp4_entries
 ) : instances(n_workers)
 {
     assert(n_workers > 0);
@@ -193,21 +195,23 @@ mpipe_t::mpipe_t(
     //
 
     {
-        // Finds dataplane Tiles.
         cpu_set_t dataplane_cpu_set;
         result = tmc_cpus_get_dataplane_cpus(&dataplane_cpu_set);
         VERIFY_ERRNO(result, "tmc_cpus_get_dataplane_cpus()");
 
         int count = tmc_cpus_count(&dataplane_cpu_set);
-        if (n_workers > count) {
+        if (first_dataplane_cpu + n_workers > count) {
             DRIVER_DIE(
                 "There is not enough dataplane Tiles for the requested number "
-                "of workers (%u requested, having %u)", n_workers, count
+                "of workers (%u requested, having %u)",
+                first_dataplane_cpu + n_workers, count
             );
         }
 
         for (int i = 0; i < n_workers; i++) {
-            result = tmc_cpus_find_nth_cpu(&dataplane_cpu_set, i);
+            result = tmc_cpus_find_nth_cpu(
+                &dataplane_cpu_set, i + first_dataplane_cpu
+            );
             VERIFY_GXIO(result, "tmc_cpus_find_nth_cpu()");
 
             int cpu_id = result;
@@ -560,7 +564,8 @@ mpipe_t::mpipe_t(
         for (instance_t *instance : this->instances) {
             instance->parent = this;
             instance->ethernet.init(
-                instance, &instance->timers, this->ether_addr, ipv4_addr
+                instance, &instance->timers, this->ether_addr, ipv4_addr,
+                static_arp4_entries
             );
         }
     }
@@ -605,30 +610,14 @@ void mpipe_t::run(void)
 {
     this->is_running = true;
 
-    // Starts N-1 worker threads. The last worker will be executed in the
-    // current thread.
-    for (size_t i = 0; i < instances.size() - 1; i++) {
-        instance_t *instance = this->instances[i];
-
+    // Starts the worker threads.
+    for (instance_t *instance : instances) {
         int result = pthread_create(
             &instance->thread, nullptr, worker_runner, instance
         );
         VERIFY_PTHREAD(result, "pthread_create()");
     }
 
-    // Executes the last worker in the current thread
-    {
-        instance_t *last_instance = this->instances.back();
-        last_instance->thread = pthread_self();
-
-        worker_runner(last_instance);
-    }
-
-    // Waits for all threads to exit.
-    for (size_t i = 0; i < instances.size() - 1; i++) {
-        instance_t *instance = this->instances[i];
-        pthread_join(instance->thread, nullptr);
-    }
 }
 
 void *worker_runner(void *instance_void)
@@ -640,6 +629,13 @@ void *worker_runner(void *instance_void)
 void mpipe_t::stop(void)
 {
     this->is_running = false;
+}
+
+void mpipe_t::join(void)
+{
+    // Waits for all threads to exit.
+    for (instance_t *instance : instances)
+        pthread_join(instance->thread, nullptr);
 }
 
 // Replicates the call to every worker TCP stack.

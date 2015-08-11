@@ -26,7 +26,7 @@
 #include <functional>
 
 #include <net/ethernet.h>   // ether_addr, ETHERTYPE_*
-#include <netinet/ether.h>  // ether_ntoa()
+#include <netinet/ether.h>  // ether_ntoa(), ether_addr
 
 #include "net/arp.hpp"      // arp_t
 #include "net/endian.hpp"   // net_t
@@ -81,6 +81,13 @@ struct ethernet_t {
         friend inline bool operator!=(addr_t a, addr_t b)
         {
             return memcmp(&a, &b, sizeof (addr_t));
+        }
+
+        static net_t<addr_t> from_ether_addr(struct ether_addr *ether_addr)
+        {
+            net_t<addr_t> addr;
+            memcpy(addr.net.value, ether_addr->ether_addr_octet, ETH_ALEN);
+            return addr;
         }
 
         // Converts the Ethernet address to the standard hex-digits-and-colons
@@ -150,11 +157,13 @@ struct ethernet_t {
     ethernet_t(
         phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
         net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr,
+        vector<typename arp_ethernet_ipv4_t::static_entry_t> static_arp_entries
+            = vector<typename arp_ethernet_ipv4_t::static_entry_t>(),
         alloc_t _alloc = alloc_t()
     ) : phys(_phys), addr(_addr), arp(_alloc), ipv4(_alloc)
     {
         max_payload_size = _max_payload_size();
-        arp.init(this, _timers, &ipv4);
+        arp.init(this, _timers, &ipv4, static_arp_entries);
         ipv4.init(this, &arp, ipv4_addr, _timers);
     }
 
@@ -162,13 +171,15 @@ struct ethernet_t {
     // instance, Ethernet address and IPv4 address.
     void init(
         phys_t *_phys, timer_manager_t *_timers, net_t<addr_t> _addr,
-        net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr
+        net_t<typename ipv4_ethernet_t::addr_t> ipv4_addr,
+        vector<typename arp_ethernet_ipv4_t::static_entry_t> static_arp_entries
+            = vector<typename arp_ethernet_ipv4_t::static_entry_t>()
     )
     {
         phys             = _phys;
         max_payload_size = _max_payload_size();
         addr             = _addr;
-        arp.init(this, _timers, &ipv4);
+        arp.init(this, _timers, &ipv4, static_arp_entries);
         ipv4.init(this, &arp, ipv4_addr, _timers);
     }
 

@@ -93,15 +93,15 @@ struct buffer_stack_info_t {
     static const array<buffer_stack_info_t, 5> BUFFERS_STACKS {
 #endif /* MPIPE_JUMBO_FRAMES */
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_128,   4048), // ~ 512 KB
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_256,   800), // ~ 200 KB
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_512,   800), // ~ 400 KB
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1024,  400), // ~ 400 KB
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1664,  400), // ~ 650 KB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_256,   1024), // ~ 256 KB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_512,   1024), // ~ 512 KB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1024,  512),  // ~ 512 KB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1664,  2048), // ~ 1664 KB
 
     #ifdef MPIPE_JUMBO_FRAMES
-        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  100), // ~ 400 KB
-        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_10368, 100), // ~ 1 MB
-        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_16384, 50)   // ~ 800 KB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  128), // ~ 512 KB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_10368, 256), // ~ 2.5 MB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_16384, 128)  // ~ 2 MB
     #endif /* MPIPE_JUMBO_FRAMES */
 };
 
@@ -172,7 +172,7 @@ struct mpipe_t {
 
         instance_t(alloc_t _alloc);
 
-        // Starts an infite polling loop on the ingress queue.
+        // Starts the n workers threads. The function immediatly returns.
         //
         // Forwards any received packet to the upper (Ethernet) data-link layer.
         void run(void);
@@ -202,16 +202,17 @@ struct mpipe_t {
         gxio_mpipe_bdesc_t _alloc_buffer(size_t size);
     };
 
-    typedef buffer::cursor_t                        cursor_t;
+    typedef buffer::cursor_t                            cursor_t;
 
     // Aliases for upper network layer types.
     //
     // This permits the user to refer to network layer types easily, (i.e.
     // 'mpipe_t::ipv4_t::addr_t' to refer to an IPv4 address).
 
-    typedef net::ethernet_t<instance_t, alloc_t>    ethernet_t;
-    typedef mpipe_t::ethernet_t::ipv4_ethernet_t    ipv4_t;
-    typedef mpipe_t::ipv4_t::tcp_ipv4_t             tcp_t;
+    typedef net::ethernet_t<instance_t, alloc_t>        ethernet_t;
+    typedef mpipe_t::ethernet_t::ipv4_ethernet_t        ipv4_t;
+    typedef mpipe_t::ethernet_t::arp_ethernet_ipv4_t    arp_ipv4_t;
+    typedef mpipe_t::ipv4_t::tcp_ipv4_t                 tcp_t;
 
     // Allocated resources for a buffer stack.
     struct buffer_stack_t {
@@ -281,8 +282,15 @@ struct mpipe_t {
     // Starts the mPIPE driver, allocates NotifRings and their iqueue wrappers,
     // an eDMA ring with its equeue wrapper and a set of buffer stacks with
     // their buffers.
+    //
+    // 'first_dataplane_cpu' specifies the number of the first dataplane Tile
+    // that can be used. Useful when multiple 'mpipe_t' instances are created
+    // and that you don't want them to share the same dataplane Tiles.
     mpipe_t(
-        const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers
+        const char *link_name, net_t<ipv4_t::addr_t> ipv4_addr, int n_workers,
+        int first_dataplane_cpu = 0,
+        vector<arp_ipv4_t::static_entry_t> static_arp_entries
+            = vector<arp_ipv4_t::static_entry_t>()
     );
 
     // Releases mPIPE resources referenced by current mPIPE environment.
@@ -293,9 +301,14 @@ struct mpipe_t {
     // This function doesn't return until a call to 'stop()' is made.
     void run(void);
 
-    // Stops the execution of 'run()'. This method just sets 'is_running' to
-    // 'false'.
+    // Stops the execution of working threads.
+    //
+    // This method just sets 'is_running' to 'false'. You should make a call to
+    // 'join()' after to wait for threads to finish.
     void stop(void);
+
+    // Waits for threads to finish.
+    void join(void);
 
     //
     // TCP server sockets.
