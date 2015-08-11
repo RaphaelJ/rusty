@@ -18,14 +18,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_NET_CHECKSUM_HPP__
-#define __TCP_MPIPE_NET_CHECKSUM_HPP__
+#ifndef __RUSTY_NET_CHECKSUM_HPP__
+#define __RUSTY_NET_CHECKSUM_HPP__
 
 #include <cstdint>
 
 #include "net/endian.hpp"   // net_t
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace net {
 
 // Computes the 16 bits ones' complement sum of the given buffer.
@@ -221,6 +221,6 @@ static inline uint16_t _swap_bytes(uint16_t bytes)
     return (bytes << 8) | (bytes >> 8);
 }
 
-} } /* namespace tcp_mpipe::net */
+} } /* namespace rusty::net */
 
-#endif /* __TCP_MPIPE_NET_CHECKSUM_HPP__ */
+#endif /* __RUSTY_NET_CHECKSUM_HPP__ */

@@ -30,7 +30,7 @@
 #include "driver/buffer.hpp"
 #include "driver/allocator.hpp"
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 namespace buffer {
 
@@ -45,4 +45,4 @@ namespace buffer {
     };
 #endif /* MPIPE_CHAINED_BUFFERS */
 
-} } } /* namespace tcp_mpipe::driver::buffer */
+} } } /* namespace rusty::driver::buffer */

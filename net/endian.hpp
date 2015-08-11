@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_NET_ENDIAN_HPP__
-#define __TCP_MPIPE_NET_ENDIAN_HPP__
+#ifndef __RUSTY_NET_ENDIAN_HPP__
+#define __RUSTY_NET_ENDIAN_HPP__
 
 #include <cstdint>
 #include <cstring>
@@ -31,7 +31,7 @@
 
 using namespace std;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace net {
 
 // Provides two generic function to change the endianness of a data-type.
@@ -229,7 +229,7 @@ static inline T _change_endian(T value)
     #endif
 }
 
-} } /* namespace tcp_mpipe::net */
+} } /* namespace rusty::net */
 
 //
 // 'std::equal_to<>' and 'std::hash<>' instances for 'net_t<>'.
@@ -237,7 +237,7 @@ static inline T _change_endian(T value)
 
 namespace std {
 
-using namespace tcp_mpipe::net;
+using namespace rusty::net;
 
 template <>
 template <typename host_t>
@@ -259,4 +259,4 @@ struct hash<net_t<host_t>> {
 
 } /* namespace std */
 
-#endif /* __TCP_MPIPE_NET_ENDIAN_HPP__ */
+#endif /* __RUSTY_NET_ENDIAN_HPP__ */

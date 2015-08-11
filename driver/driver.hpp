@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_DRIVER_DRIVER_HPP__
-#define __TCP_MPIPE_DRIVER_DRIVER_HPP__
+#ifndef __RUSTY_DRIVER_DRIVER_HPP__
+#define __RUSTY_DRIVER_DRIVER_HPP__
 
 #include <gxio/mpipe.h>     // gxio_strerror
 
@@ -27,9 +27,9 @@
 
 #define DRIVER_COLOR     COLOR_YEL
 #define DRIVER_DEBUG(MSG, ...)                                                 \
-    TCP_MPIPE_DEBUG("DRIVER", DRIVER_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DEBUG("DRIVER", DRIVER_COLOR, MSG, ##__VA_ARGS__)
 #define DRIVER_DIE(MSG, ...)                                                   \
-    TCP_MPIPE_DIE(  "DRIVER", DRIVER_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DIE(  "DRIVER", DRIVER_COLOR, MSG, ##__VA_ARGS__)
 
 // Checks for errors in function which returns -1 and sets errno on failure.
 #define VERIFY_ERRNO(VAL, WHAT)                                                \
@@ -53,4 +53,4 @@
         DRIVER_DIE("%s: (%ld) %s", (WHAT), __val, gxio_strerror(__val));       \
   } while (0)
 
-#endif /* __TCP_MPIPE_DRIVER_DRIVER_HPP__ */
+#endif /* __RUSTY_DRIVER_DRIVER_HPP__ */

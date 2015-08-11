@@ -21,8 +21,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_DRIVER_MPIPE_HPP__
-#define __TCP_MPIPE_DRIVER_MPIPE_HPP__
+#ifndef __RUSTY_DRIVER_MPIPE_HPP__
+#define __RUSTY_DRIVER_MPIPE_HPP__
 
 #include <array>
 #include <vector>
@@ -39,9 +39,9 @@
 
 using namespace std;
 
-using namespace tcp_mpipe::net;
+using namespace rusty::net;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 
 // -----------------------------------------------------------------------------
@@ -92,11 +92,11 @@ struct buffer_stack_info_t {
 #else
     static const array<buffer_stack_info_t, 5> BUFFERS_STACKS {
 #endif /* MPIPE_JUMBO_FRAMES */
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_128,   4048), // ~ 512 KB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_128,   8096), // ~ 1 MB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_256,   1024), // ~ 256 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_512,   1024), // ~ 512 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1024,  512),  // ~ 512 KB
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1664,  2048), // ~ 1664 KB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1664,  2048), // ~ 3 MB
 
     #ifdef MPIPE_JUMBO_FRAMES
         buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  128), // ~ 512 KB
@@ -357,6 +357,6 @@ inline mpipe_t::tcp_t::seq_t mpipe_t::instance_t::get_current_tcp_seq(void)
     return mpipe_t::tcp_t::seq_t((uint32_t) get_cycle_count() / DELAY);
 }
 
-} } /* namespace tcp_mpipe::driver */
+} } /* namespace rusty::driver */
 
-#endif /* __TCP_MPIPE_DRIVER_MPIPE_HPP__ */
+#endif /* __RUSTY_DRIVER_MPIPE_HPP__ */

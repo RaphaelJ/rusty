@@ -32,7 +32,7 @@
 
 using namespace std;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 namespace cpu {
 
@@ -67,4 +67,4 @@ void bind_to_dataplane(unsigned int n)
     #endif
 }
 
-} } } /* namespace tcp_mpipe::driver::cpu */
+} } } /* namespace rusty::driver::cpu */

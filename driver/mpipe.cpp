@@ -49,9 +49,9 @@
 
 using namespace std;
 
-using namespace tcp_mpipe::net;
+using namespace rusty::net;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 
 // Returns the hardware address of the link related to the given mPIPE
@@ -697,4 +697,4 @@ static net_t<mpipe_t::ethernet_t::addr_t> _ether_addr(gxio_mpipe_link_t *link)
     return addr;
 }
 
-} } /* namespace tcp_mpipe::driver */
+} } /* namespace rusty::driver */

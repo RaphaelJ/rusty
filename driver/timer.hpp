@@ -19,8 +19,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_DRIVER_TIMER_HPP__
-#define __TCP_MPIPE_DRIVER_TIMER_HPP__
+#ifndef __RUSTY_DRIVER_TIMER_HPP__
+#define __RUSTY_DRIVER_TIMER_HPP__
 
 #include <cstdint>
 #include <functional>       // less
@@ -32,9 +32,9 @@
 
 using namespace std;
 
-using namespace tcp_mpipe::driver::cpu;
+using namespace rusty::driver::cpu;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 namespace timer {
 
@@ -200,6 +200,6 @@ timer_manager_t<alloc_t>::_insert(delay_t delay, function<void()> f)
     return expire;
 }
 
-} } } /* namespace tcp_mpipe::driver::timer */
+} } } /* namespace rusty::driver::timer */
 
-#endif /* __TCP_MPIPE_DRIVER_TIMER_HPP__ */
+#endif /* __RUSTY_DRIVER_TIMER_HPP__ */

@@ -28,7 +28,7 @@
 
 #include "net/checksum.hpp"
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace net {
 
 const partial_sum_t partial_sum_t::ZERO = partial_sum_t();
@@ -301,4 +301,4 @@ precomputed_sums_t::_precompute_table(const void *_data, size_t _size)
     }
 #endif /* NDEBUG */
 
-} } /* namespace tcp_mpipe::net */
+} } /* namespace rusty::net */

@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_NET_TCP_HPP__
-#define __TCP_MPIPE_NET_TCP_HPP__
+#ifndef __RUSTY_NET_TCP_HPP__
+#define __RUSTY_NET_TCP_HPP__
 
 #include <algorithm>                // copy(), min()
 #include <array>
@@ -42,14 +42,14 @@
 
 using namespace std;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace net {
 
 #define TCP_COLOR     COLOR_MAG
 #define TCP_DEBUG(MSG, ...)                                                    \
-    TCP_MPIPE_DEBUG("TCP", TCP_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DEBUG("TCP", TCP_COLOR, MSG, ##__VA_ARGS__)
 #define TCP_ERROR(MSG, ...)                                                    \
-    TCP_MPIPE_ERROR("TCP", TCP_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_ERROR("TCP", TCP_COLOR, MSG, ##__VA_ARGS__)
 
 // TCP Control Block unique identifier.
 //
@@ -2467,14 +2467,14 @@ tcp_t<network_t, alloc_t>::_get_current_tcp_seq(void)
 #undef TCP_DEBUG
 #undef TCP_ERROR
 
-} } /* namespace tcp_mpipe::net */
+} } /* namespace rusty::net */
 
 namespace std {
 
 // 'std::hash<>' and 'std::equal_to<>' instances are required for TCB
 // identifiers to be used in unordered containers.
 
-using namespace tcp_mpipe::net;
+using namespace rusty::net;
 
 template <>
 template <typename addr_t, typename port_t>
@@ -2501,4 +2501,4 @@ struct equal_to<tcp_tcb_id_t<addr_t, port_t>> {
 
 } /* namespace std */
 
-#endif /* __TCP_MPIPE_NET_TCP_HPP__ */
+#endif /* __RUSTY_NET_TCP_HPP__ */

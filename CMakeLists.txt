@@ -1,4 +1,4 @@
-project (tcp-mpipe)
+project (rusty)
 
 # CFLAGS
 
@@ -11,7 +11,8 @@ add_definitions(-DUSE_TILE_ALLOCATOR)
 # Use Jumbo Ethernet frames.
 #
 # The remote TCP must also have Jumbo frame enabled.
-# Improve the performances.
+# Can improve the performances, but the mPIPE processor is not always able to
+# handle a full-rate stream with jumbo frames.
 # add_definitions(-DMPIPE_JUMBO_FRAMES)
 
 # Disable debug messages and assertions.

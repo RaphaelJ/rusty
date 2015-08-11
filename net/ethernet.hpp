@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_NET_ETHERNET_HPP__
-#define __TCP_MPIPE_NET_ETHERNET_HPP__
+#ifndef __RUSTY_NET_ETHERNET_HPP__
+#define __RUSTY_NET_ETHERNET_HPP__
 
 #include <cinttypes>
 #include <cstring>
@@ -31,16 +31,16 @@
 #include "net/arp.hpp"      // arp_t
 #include "net/endian.hpp"   // net_t
 #include "net/ipv4.hpp"     // ipv4_t
-#include "util/macros.hpp"  // TCP_MPIPE_*, COLOR_*
+#include "util/macros.hpp"  // RUSTY_*, COLOR_*
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace net {
 
 #define ETH_COLOR       COLOR_RED
 #define ETH_DEBUG(MSG, ...)                                                    \
-    TCP_MPIPE_DEBUG("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DEBUG("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
 #define ETH_ERROR(MSG, ...)                                                    \
-    TCP_MPIPE_ERROR("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_ERROR("ETH", ETH_COLOR, MSG, ##__VA_ARGS__)
 
 // *_NET constants are network byte order constants.
 static const net_t<uint16_t> ETHERTYPE_ARP_NET = ETHERTYPE_ARP;
@@ -318,6 +318,6 @@ ethernet_t<phys_t, alloc_t>::BROADCAST_ADDR =
 #undef ETH_DEBUG
 #undef ETH_ERROR
 
-} } /* namespace tcp_mpipe::net */
+} } /* namespace rusty::net */
 
-#endif /* __TCP_MPIPE_NET_ETHERNET_HPP__ */
+#endif /* __RUSTY_NET_ETHERNET_HPP__ */

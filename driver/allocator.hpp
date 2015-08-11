@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__
-#define __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__
+#ifndef __RUSTY_DRIVER_ALLOCATOR_HPP__
+#define __RUSTY_DRIVER_ALLOCATOR_HPP__
 
 #include <memory>           // shared_ptr
 #include <utility>          // forward
@@ -33,7 +33,7 @@
 
 using namespace std;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 
 // Allocator which will use the provided 'tmc_alloc_t' configuration to allocate
@@ -216,6 +216,6 @@ private:
     }
 };
 
-} } /* namespace tcp_mpipe::driver */
+} } /* namespace rusty::driver */
 
-#endif /* __TCP_MPIPE_DRIVER_ALLOCATOR_HPP__ */
+#endif /* __RUSTY_DRIVER_ALLOCATOR_HPP__ */

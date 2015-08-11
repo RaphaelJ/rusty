@@ -37,12 +37,12 @@
 #include "driver/mpipe.hpp"
 #include "net/checksum.hpp"     // partial_sum_t, precomputed_sums_t
 #include "net/endian.hpp"       // net_t
-#include "util/macros.hpp"      // LIKELY(), UNLIKELY
+#include "util/macros.hpp"      // LIKELY(), UNLIKELY, RUSTY_*
 
 using namespace std;
 
-using namespace tcp_mpipe::driver;
-using namespace tcp_mpipe::net;
+using namespace rusty::driver;
+using namespace rusty::net;
 
 #define USE_PRECOMPUTED_CHECKSUMS
 
@@ -54,16 +54,22 @@ static vector<mpipe_t::arp_ipv4_t::static_entry_t> static_arp_entries {
     _static_arp_entry("10.0.2.1", "90:e2:ba:46:f2:d4"),
 
     // eth3 frodo.run.montefiore.ulg.ac.be
-    _static_arp_entry("10.0.3.1", "90:e2:ba:46:f2:d5")
+    _static_arp_entry("10.0.3.1", "90:e2:ba:46:f2:d5"),
+
+    // eth4 frodo.run.montefiore.ulg.ac.be
+    _static_arp_entry("10.0.4.1", "90:e2:ba:46:f2:e0"),
+
+    // eth5 frodo.run.montefiore.ulg.ac.be
+    _static_arp_entry("10.0.5.1", "90:e2:ba:46:f2:e1")
 };
 
 #define HTTPD_COLOR     COLOR_GRN
 #define HTTPD_DEBUG(MSG, ...)                                                  \
-    TCP_MPIPE_DEBUG("HTTPD", HTTPD_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DEBUG("HTTPD", HTTPD_COLOR, MSG, ##__VA_ARGS__)
 #define HTTPD_ERROR(MSG, ...)                                                  \
-    TCP_MPIPE_ERROR("HTTPD", HTTPD_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_ERROR("HTTPD", HTTPD_COLOR, MSG, ##__VA_ARGS__)
 #define HTTPD_DIE(MSG, ...)                                                    \
-    TCP_MPIPE_DIE(  "HTTPD", HTTPD_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DIE(  "HTTPD", HTTPD_COLOR, MSG, ##__VA_ARGS__)
 
 // Parsed CLI arguments.
 struct args_t {

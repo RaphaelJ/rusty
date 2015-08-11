@@ -20,10 +20,10 @@
 
 #include <cstdint>
 
-#ifndef __TCP_MPIPE_DRIVERS_CPU_HPP__
-#define __TCP_MPIPE_DRIVERS_CPU_HPP__
+#ifndef __RUSTY_DRIVERS_CPU_HPP__
+#define __RUSTY_DRIVERS_CPU_HPP__
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 namespace cpu {
 
@@ -38,6 +38,6 @@ static constexpr cycles_t CYCLES_PER_SECOND = 1200000000;
 // Fails if there is less than n + 1 dataplane Tiles.
 void bind_to_dataplane(unsigned int n);
 
-} } } /* namespace tcp_mpipe::driver:cpu */
+} } } /* namespace rusty::driver:cpu */
 
-#endif /* __TCP_MPIPE_DRIVERS_CPU_HPP__ */
+#endif /* __RUSTY_DRIVERS_CPU_HPP__ */

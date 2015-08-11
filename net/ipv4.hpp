@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_NET_IPV4_HPP__
-#define __TCP_MPIPE_NET_IPV4_HPP__
+#ifndef __RUSTY_NET_IPV4_HPP__
+#define __RUSTY_NET_IPV4_HPP__
 
 #include <algorithm>            // min()
 #include <cstring>
@@ -34,18 +34,18 @@
 
 #include "net/checksum.hpp"     // checksum_t, partial_sum_t
 #include "net/tcp.hpp"          // tcp_t
-#include "util/macros.hpp"      // TCP_MPIPE_*, COLOR_*
+#include "util/macros.hpp"      // RUSTY_*, COLOR_*
 
 using namespace std;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace net {
 
 #define IPV4_COLOR     COLOR_CYN
 #define IPV4_DEBUG(MSG, ...)                                                   \
-    TCP_MPIPE_DEBUG("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DEBUG("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
 #define IPV4_ERROR(MSG, ...)                                                   \
-    TCP_MPIPE_ERROR("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_ERROR("IPV4", IPV4_COLOR, MSG, ##__VA_ARGS__)
 
 struct ipv4_addr_t {
     uint32_t    value;
@@ -443,14 +443,14 @@ private:
 #undef IPV4_DEBUG
 #undef IPV4_ERROR
 
-} } /* namespace tcp_mpipe::net */
+} } /* namespace rusty::net */
 
 namespace std {
 
 // 'std::hash<>' and 'std::equal_to<>' instances are required for IPv4 addresses
 // to be used in unordered containers.
 
-using namespace tcp_mpipe::net;
+using namespace rusty::net;
 
 template <>
 struct hash<ipv4_addr_t> {
@@ -470,4 +470,4 @@ struct equal_to<ipv4_addr_t> {
 
 } /* namespace std */
 
-#endif /* __TCP_MPIPE_NET_IPV4_HPP__ */
+#endif /* __RUSTY_NET_IPV4_HPP__ */

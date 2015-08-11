@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_DRIVERS_BUFFER_HPP__
-#define __TCP_MPIPE_DRIVERS_BUFFER_HPP__
+#ifndef __RUSTY_DRIVERS_BUFFER_HPP__
+#define __RUSTY_DRIVERS_BUFFER_HPP__
 
 #include <algorithm>        // min()
 #include <cassert>
@@ -33,7 +33,7 @@
 
 using namespace std;
 
-namespace tcp_mpipe {
+namespace rusty {
 namespace driver {
 namespace buffer {
 
@@ -678,6 +678,6 @@ void cursor_t::_init_with_bdesc(
     #endif /* MPIPE_CHAINED_BUFFERS */
 }
 
-} } } /* namespace tcp_mpipe::driver:buffer */
+} } } /* namespace rusty::driver:buffer */
 
-#endif /* __TCP_MPIPE_DRIVERS_BUFFER_HPP__ */
+#endif /* __RUSTY_DRIVERS_BUFFER_HPP__ */

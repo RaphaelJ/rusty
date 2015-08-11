@@ -18,8 +18,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
-#ifndef __TCP_MPIPE_UTILS_MACROS_HPP__
-#define __TCP_MPIPE_UTILS_MACROS_HPP__
+#ifndef __RUSTY_UTILS_MACROS_HPP__
+#define __RUSTY_UTILS_MACROS_HPP__
 
 //
 // Branch prediction hints.
@@ -48,14 +48,14 @@
 //
 
 // There is three levels of log messages: debug, error and die, each associated
-// with their respective 'TCP_MPIPE_*' macros.
+// with their respective 'RUSTY_*' macros.
 //
-// * 'TCP_MPIPE_DEBUG()' should be used for information messages during normal
+// * 'RUSTY_DEBUG()' should be used for information messages during normal
 //   operations, such as events. These messages will only be displayed when
 //   NDEBUG is not defined.
-// * 'TCP_MPIPE_ERROR()' should be used for unexpected but recoverable events,
+// * 'RUSTY_ERROR()' should be used for unexpected but recoverable events,
 //   such as the reception of an invalid packet.
-// * 'TCP_MPIPE_DIE()' should be used for unexpected and unrecoverable events,
+// * 'RUSTY_DIE()' should be used for unexpected and unrecoverable events,
 //   such as a failled memory allocation. The macro immediately stops the
 //   application after displaying the message by calling 'exit()' with
 //   'EXIT_FAILURE' as status code.
@@ -68,11 +68,11 @@
 // number of arguments could be given to the macros.
 
 #ifdef NDEBUG
-    #define TCP_MPIPE_DEBUG(MODULE, COLOR, MSG, ...)
+    #define RUSTY_DEBUG(MODULE, COLOR, MSG, ...)
 #elif NDEBUGMSG
-    #define TCP_MPIPE_DEBUG(MODULE, COLOR, MSG, ...)
+    #define RUSTY_DEBUG(MODULE, COLOR, MSG, ...)
 #else
-    #define TCP_MPIPE_DEBUG(MODULE, COLOR, MSG, ...)                           \
+    #define RUSTY_DEBUG(MODULE, COLOR, MSG, ...)                               \
         do {                                                                   \
             fprintf(                                                           \
                 stderr, "%-20s%-20s" MSG,                                      \
@@ -84,7 +84,7 @@
         } while (0)
 #endif
 
-#define TCP_MPIPE_ERROR(MODULE, COLOR, MSG, ...)                               \
+#define RUSTY_ERROR(MODULE, COLOR, MSG, ...)                                   \
     do {                                                                       \
         fprintf(                                                               \
             stderr, "%-20s%-20s" COLOR_BOLD MSG,                               \
@@ -95,7 +95,7 @@
         fprintf(stderr, " (" __FILE__ ":%d)" COLOR_RESET "\n", __LINE__);      \
     } while (0)
 
-#define TCP_MPIPE_DIE(MODULE, COLOR, MSG, ...)                                 \
+#define RUSTY_DIE(MODULE, COLOR, MSG, ...)                                     \
     do {                                                                       \
         fprintf(                                                               \
             stderr, "%-20s%-20s" COLOR_BOLD MSG,                               \
@@ -108,4 +108,4 @@
     } while (0)
 
 
-#endif /* __TCP_MPIPE_UTILS_MACROS_HPP__ */
+#endif /* __RUSTY_UTILS_MACROS_HPP__ */

@@ -26,16 +26,16 @@
 
 #include "driver/cpu.hpp"       // bind_to_dataplane()
 #include "driver/mpipe.hpp"     // mpipe_t
-#include "util/macros.hpp"      // TCP_MPIPE_DEBUG, COLOR_GRN
+#include "util/macros.hpp"      // RUSTY_DEBUG, COLOR_GRN
 
 using namespace std;
 
-using namespace tcp_mpipe::driver;
-using namespace tcp_mpipe::net;
+using namespace rusty::driver;
+using namespace rusty::net;
 
 #define ECHO_COLOR     COLOR_GRN
 #define ECHO_DEBUG(MSG, ...)                                                   \
-    TCP_MPIPE_DEBUG("ECHO", ECHO_COLOR, MSG, ##__VA_ARGS__)
+    RUSTY_DEBUG("ECHO", ECHO_COLOR, MSG, ##__VA_ARGS__)
 
 // Parsed CLI arguments.
 struct args_t {
