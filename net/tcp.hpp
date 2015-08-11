@@ -2027,10 +2027,15 @@ private:
             }
 
             // Set of entries to be sent.
-            shared_ptr<vector<typename tcb_t::tx_queue_entry_t, alloc_t> >
-//                 to_send = allocate_shared(this->alloc, n_entries, this->alloc)
-                to_send( new vector<typename tcb_t::tx_queue_entry_t, alloc_t>(n_entries, this->alloc))
-            ;
+            //
+            // Allocates the vector in an managed pointer so it will no be
+            // copied by closures.
+            typedef vector<typename tcb_t::tx_queue_entry_t, alloc_t>
+                    to_send_vec_t;
+
+            shared_ptr<to_send_vec_t> to_send = allocate_shared<to_send_vec_t>(
+                this->alloc, n_entries, this->alloc
+            );
 
             copy(
                 tcb->tx_queue_not_sent.begin(),

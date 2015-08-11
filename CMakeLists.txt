@@ -3,15 +3,26 @@ project (tcp-mpipe)
 # CFLAGS
 
 # Use the Tilera's memory allocator.
+#
 # Memory that is required by a single core will be homed on this core.
+# Can improve the performances.
 add_definitions(-DUSE_TILE_ALLOCATOR)
 
-add_definitions(-DMPIPE_JUMBO_FRAMES)
+# Use Jumbo Ethernet frames.
+#
+# The remote TCP must also have Jumbo frame enabled.
+# Improve the performances.
+# add_definitions(-DMPIPE_JUMBO_FRAMES)
 
+# Disable debug messages and assertions.
+# Do not improve performances.
 # add_definitions(-DMPIPE_CHAINED_BUFFERS)
 
-add_definitions(-DNDEBUG) # Disable debug messages and assertions.
-# add_definitions(-DNDEBUGMSG) # Disable debug messages.
+# Disable debug messages and assertions.
+add_definitions(-DNDEBUG)
+
+# Disable debug messages.
+# add_definitions(-DNDEBUGMSG)
 
 # End of CFLAGS
 

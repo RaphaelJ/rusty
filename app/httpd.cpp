@@ -42,7 +42,7 @@ using namespace std;
 using namespace tcp_mpipe::driver;
 using namespace tcp_mpipe::net;
 
-// #define USE_PRECOMPUTED_CHECKSUMS
+#define USE_PRECOMPUTED_CHECKSUMS
 
 #define HTTPD_COLOR     COLOR_GRN
 #define HTTPD_DEBUG(MSG, ...)                                                  \
