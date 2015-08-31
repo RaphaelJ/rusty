@@ -114,7 +114,7 @@ addresses (10.0.2.2 on `xgbe1` and 10.0.3.2 on `xgbe2`), with 18 cores dedicated
 for the first link, and 17 cores for the second. The web-server serves pages
 from the `/bench/pages` directory on port 80:
 
-    ./app/httpd 80 bench/pages/ 2 xgbe1 10.0.2.2 18 xgbe2 10.0.2.3 17
+    ./app/httpd 80 bench/pages/ 2 xgbe1 10.0.2.2 18 xgbe2 10.0.3.2 17
 
 About 30 cores are required to fill a single 10 Gbps Ethernet link.
 
