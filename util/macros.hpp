@@ -25,8 +25,13 @@
 // Branch prediction hints.
 //
 
-#define LIKELY(x)       __builtin_expect(!!(x), 1)
-#define UNLIKELY(x)     __builtin_expect((x), 0)
+#ifdef BRANCH_PREDICT
+    #define LIKELY(x)       __builtin_expect(!!(x), 1)
+    #define UNLIKELY(x)     __builtin_expect((x), 0)
+#else
+    #define LIKELY(x)
+    #define UNLIKELY(x)
+#endif /* BRANCH_PREDICT */
 
 //
 // Terminal colors

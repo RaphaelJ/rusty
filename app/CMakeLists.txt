@@ -6,6 +6,11 @@ target_link_libraries (
     driver net util
 )
 
+# Precomputes the checksums of the files in the root directory.
+#
+# Improves the performances.
+add_definitions(-DUSE_PRECOMPUTED_CHECKSUMS)
+
 add_executable(httpd httpd.cpp)
 
 target_link_libraries (

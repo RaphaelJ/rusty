@@ -32,6 +32,7 @@
 #include <gxio/mpipe.h>         // gxio_mpipe_*, GXIO_MPIPE_*
 
 #include "driver/allocator.hpp" // tile_allocator_t
+#include "driver/clock.hpp"     // cpu_clock_t
 #include "driver/buffer.hpp"    // cursor_t
 #include "driver/timer.hpp"     // timer_manager_t
 #include "net/endian.hpp"       // net_t
@@ -99,9 +100,9 @@ struct buffer_stack_info_t {
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1664,  2048), // ~ 3 MB
 
     #ifdef MPIPE_JUMBO_FRAMES
-        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  128), // ~ 512 KB
-        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_10368, 256), // ~ 2.5 MB
-        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_16384, 128)  // ~ 2 MB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_4096,  256),  // ~ 1 MB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_10368, 1024), // ~ 10 MB
+        buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_16384, 128)   // ~ 2 MB
     #endif /* MPIPE_JUMBO_FRAMES */
 };
 
@@ -139,11 +140,13 @@ struct mpipe_t {
         // Member types
         //
 
+        typedef cpu_clock_t                     clock_t;
+
         // Cursor which will abstract how the upper (Ethernet) layer will read
         // from and write to memory in mPIPE buffers.
         typedef buffer::cursor_t                cursor_t;
 
-        typedef timer::timer_manager_t<alloc_t> timer_manager_t;
+        typedef cpu_timer_manager_t<alloc_t>    timer_manager_t;
 
         //
         // Fields

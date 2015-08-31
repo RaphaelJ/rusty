@@ -198,25 +198,11 @@ partial_sum_t precomputed_sums_t::sum(size_t begin, size_t end) const
     size_t begin_div2 = begin / 2,
            end_div2   = end   / 2;
 
-    uint32_t sum = this->table[end_div2] - this->table[begin_div2];
+    // Substraction in ones's complement arithmetic is adding the negation.
+    uint32_t sum =   this->table[end_div2]
+                   + ((uint16_t) ~this->table[begin_div2]);
 
-    // Removes the non-included first byte of the first 16 bits word.
-    if (begin & 0x1) {
-        #if __BYTE_ORDER == __LITTLE_ENDIAN
-            sum -= ((const char *) this->data)[begin - 1] << 8;
-        #elif __BYTE_ORDER == __BIG_ENDIAN
-            sum -= ((const char *) this->data)[begin - 1];
-        #else
-            #error "Please set __BYTE_ORDER in <bits/endian.h>"
-        #endif
-
-        // Removes the carry bit before swapping bytes.
-        sum = (sum >> 16) + (sum & 0xFFFF);
-
-        sum = (uint32_t) _swap_bytes((uint16_t) sum);
-    }
-
-    // Adds the included last byte.
+    // Adds the included last byte of the first 16 bits word.
     if (end & 0x1) {
         #if __BYTE_ORDER == __LITTLE_ENDIAN
             sum += ((const char *) this->data)[end - 1];
@@ -227,7 +213,27 @@ partial_sum_t precomputed_sums_t::sum(size_t begin, size_t end) const
         #endif
     }
 
-    sum = (sum >> 16) + (sum & 0xFFFF);
+    // Removes the non-included first byte.
+    if (begin & 0x1) {
+        #if __BYTE_ORDER == __LITTLE_ENDIAN
+            sum += (uint16_t) ~((const char *) this->data)[begin - 1];
+        #elif __BYTE_ORDER == __BIG_ENDIAN
+            sum += (uint16_t) ~((const char *) this->data)[begin - 1] << 8;
+        #else
+            #error "Please set __BYTE_ORDER in <bits/endian.h>"
+        #endif
+
+        // Removes the carry bit before swapping bytes.
+        do
+            sum = (sum >> 16) + (sum & 0xFFFF);
+        while (sum >> 16);
+
+        sum = (uint32_t) _swap_bytes((uint16_t) sum);
+    }
+
+    do
+        sum = (sum >> 16) + (sum & 0xFFFF);
+    while (sum >> 16);
 
     size_t size = end - begin;
 

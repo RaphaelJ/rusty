@@ -44,8 +44,6 @@ using namespace std;
 using namespace rusty::driver;
 using namespace rusty::net;
 
-#define USE_PRECOMPUTED_CHECKSUMS
-
 static mpipe_t::arp_ipv4_t::static_entry_t
 _static_arp_entry(const char *ipv4_addr_char, const char *ether_addr_char);
 
@@ -227,7 +225,7 @@ int main(int argc, char **argv)
             "address on port %d serving %s",
             interface.link_name,
             mpipe_t::ethernet_t::addr_t::to_alpha(mpipe.ether_addr),
-            mpipe_t::ipv4_t::addr_t::to_alpha(interface.link_name), 
+            mpipe_t::ipv4_t::addr_t::to_alpha(interface.ipv4_addr),
             args.tcp_port, args.root_dir
         );
 
@@ -237,6 +235,8 @@ int main(int argc, char **argv)
 
         first_dataplane_cpu += interface.n_workers;
     }
+
+    printf("HTTPD started\n");
 
     // Wait for all instances to finish (will not happen).
     for (mpipe_t &mpipe_instance : instances)

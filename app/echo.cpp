@@ -24,7 +24,6 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "driver/cpu.hpp"       // bind_to_dataplane()
 #include "driver/mpipe.hpp"     // mpipe_t
 #include "util/macros.hpp"      // RUSTY_DEBUG, COLOR_GRN
 
@@ -60,8 +59,6 @@ int main(int argc, char **argv)
     args_t args;
     if (!_parse_args(argc, argv, &args))
         return EXIT_FAILURE;
-
-    cpu::bind_to_dataplane(0);
 
     mpipe_t mpipe(args.link_name, args.ipv4_addr, args.n_workers);
 
@@ -118,15 +115,15 @@ int main(int argc, char **argv)
                     );
                 };
 
-            handlers.remote_close = _do_nothing;
 
-            handlers.close =
+            handlers.remote_close =
                 [conn]() mutable
                 {
                     // Closes when the remote closes the connection.
                     conn.close();
                 };
 
+            handlers.close = _do_nothing;
             handlers.reset = _do_nothing;
 
             return handlers;

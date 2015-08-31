@@ -22,21 +22,20 @@
 #ifndef __RUSTY_DRIVER_TIMER_HPP__
 #define __RUSTY_DRIVER_TIMER_HPP__
 
+#include <cassert>
 #include <cstdint>
+#include <cinttypes>        // PRIu64
 #include <functional>       // less
 #include <memory>           // allocator
 #include <map>
 #include <unordered_map>
 
-#include "driver/cpu.hpp"   // cycles_t
+#include "driver/clock.hpp" // cpu_clock_t
 
 using namespace std;
 
-using namespace rusty::driver::cpu;
-
 namespace rusty {
 namespace driver {
-namespace timer {
 
 // Manages timers using uses the CPU's cycle counter.
 //
@@ -46,33 +45,32 @@ namespace timer {
 // 'tick()', 'schedule()' and 'remove()'. Calling 'schedule()' or 'remove()'
 // within a timer should be safe.
 template <typename alloc_t = allocator<char *>>
-struct timer_manager_t {
+struct cpu_timer_manager_t {
     //
     // Member types
     //
 
-    // Timer delay in microseconds (10^-6).
-    typedef uint64_t                                    delay_t;
-
-    // Timers are stored by the cycle counter value for which they will expire.
+    // Timers are stored by the time they will expire.
     //
-    // Only one function/timer can be mapped to an expiration counter value. In
-    // the very rare case where two timers map on the same counter value, the
-    // second one will be inserted in the next free cycle counter slot (e.g. if
-    // two timers are inserted at counter value 123456, the second one will be
-    // inserted at 123457).
+    // Only one function/timer can be mapped to an expiration date. In
+    // the very rare case where two timers map on the same expiration date, the
+    // second one will be inserted in the next free expiration date in the
+    // domain.
     //
-    // This should be pretty safe because a CPU cycle is a very small time unit
-    // and the execution of the first timer will take more than one cycle. This
+    // As expiration dates are based on the CPU cycle counter, the next
+    // expiration date is only once cycle later. This should be pretty safe to
+    // use the next CPU cycle because a CPU cycle is a very small time unit and
+    // the execution of the first timer will take more than one cycle. This
     // simplifies the implementation and makes it more efficient than a vector
     // of timers which requires numerous dynamic memory allocations.
     typedef map<
-                cycles_t, function<void()>, less<cycles_t>, alloc_t
-            >                                           timers_t;
+                cpu_clock_t::time_t, function<void()>,
+                less<cpu_clock_t::time_t>, alloc_t
+            >                   timers_t;
 
     // The 'destroy()' method uses the timer expiration date to retrieve and
     // remove a timer.
-    typedef cycles_t                                    timer_id_t;
+    typedef cpu_clock_t::time_t timer_id_t;
 
     //
     // Fields
@@ -84,18 +82,18 @@ struct timer_manager_t {
     // Methods
     //
 
-    timer_manager_t(alloc_t _alloc = alloc_t());
+    cpu_timer_manager_t(alloc_t _alloc = alloc_t());
 
     // Executes expired timers. This method should be called periodically.
     void tick(void);
 
-    // Registers a timer with a delay in microseconds (10^-6) and a function.
-    //
-    // The timer will only be executed once.
-    timer_id_t schedule(delay_t delay, function<void()> f);
+    // Registers a timer. The timer will only be executed once.
+    timer_id_t schedule(cpu_clock_t::interval_t delay, function<void()> f);
 
     // Reschedules the given timer with a new delay. Returns the new 'timer_id'.
-    timer_id_t reschedule(timer_id_t timer_id, delay_t new_delay);
+    timer_id_t reschedule(
+        timer_id_t timer_id, cpu_clock_t::interval_t new_delay
+    );
 
     // Unschedules a timer by the identifier that has been returned by the
     // 'schedule()' call.
@@ -106,17 +104,17 @@ struct timer_manager_t {
 
 private:
     // Sames as 'schedule' but doesn't produce a log message.
-    timer_id_t _insert(delay_t delay, function<void()> f);
+    timer_id_t _insert(cpu_clock_t::interval_t delay, function<void()> f);
 };
 
 template <typename alloc_t>
-timer_manager_t<alloc_t>::timer_manager_t(alloc_t _alloc)
-    : timers(less<cycles_t>(), _alloc)
+cpu_timer_manager_t<alloc_t>::cpu_timer_manager_t(alloc_t _alloc)
+    : timers(less<cpu_clock_t::time_t>(), _alloc)
 {
 }
 
 template <typename alloc_t>
-void timer_manager_t<alloc_t>::tick(void)
+void cpu_timer_manager_t<alloc_t>::tick(void)
 {
     typename timers_t::const_iterator it;
 
@@ -127,11 +125,11 @@ void timer_manager_t<alloc_t>::tick(void)
         // Similarly, the loop call 'timers.begin()' at each iteration as the
         // iterator could be invalidated.
 
-        cycles_t current_count = get_cycle_count();
-        if (it->first > current_count)
+        cpu_clock_t::time_t now = cpu_clock_t::time_t::now();
+        if (less<cpu_clock_t::time_t>()(now, it->first))
             break;
 
-        DRIVER_DEBUG("Executes timer %" PRIu64, it->first);
+        DRIVER_DEBUG("Executes timer %" PRIu64, it->first.cycles);
 
         function<void(void)> f = move(it->second);
         timers.erase(it);
@@ -141,22 +139,26 @@ void timer_manager_t<alloc_t>::tick(void)
 }
 
 template <typename alloc_t>
-typename timer_manager_t<alloc_t>::timer_id_t
-timer_manager_t<alloc_t>::schedule(delay_t delay, function<void()> f)
+typename cpu_timer_manager_t<alloc_t>::timer_id_t
+cpu_timer_manager_t<alloc_t>::schedule(
+    cpu_clock_t::interval_t delay, function<void()> f
+)
 {
     timer_id_t timer_id = this->_insert(delay, f);
 
     DRIVER_DEBUG(
-        "Schedules timer %" PRIu64 " with a %" PRIu64 " µs delay", timer_id,
-        delay
+        "Schedules timer %" PRIu64 " with a %" PRIu64 " µs delay",
+        timer_id.cycles, delay.microsec()
     );
 
     return timer_id;
 }
 
 template <typename alloc_t>
-typename timer_manager_t<alloc_t>::timer_id_t
-timer_manager_t<alloc_t>::reschedule(timer_id_t timer_id, delay_t new_delay)
+typename cpu_timer_manager_t<alloc_t>::timer_id_t
+cpu_timer_manager_t<alloc_t>::reschedule(
+    timer_id_t timer_id, cpu_clock_t::interval_t new_delay
+)
 {
     auto it = timers.find(timer_id);
     assert(it != timers.end());
@@ -167,39 +169,35 @@ timer_manager_t<alloc_t>::reschedule(timer_id_t timer_id, delay_t new_delay)
 
     DRIVER_DEBUG(
         "Reschedules timer %" PRIu64 " as %" PRIu64 " with a %" PRIu64
-        " µs delay", timer_id, new_timer_id, new_delay
+        " µs delay", timer_id.cycles, new_timer_id.cycles, new_delay.microsec()
     );
 
     return new_timer_id;
 }
 
 template <typename alloc_t>
-bool timer_manager_t<alloc_t>::remove(timer_id_t timer_id)
+bool cpu_timer_manager_t<alloc_t>::remove(timer_id_t timer_id)
 {
-    DRIVER_DEBUG("Unschedules timer %" PRIu64, timer_id);
+    DRIVER_DEBUG("Unschedules timer %" PRIu64, timer_id.cycles);
 
     return timers.erase(timer_id);
 }
 
 template <typename alloc_t>
-typename timer_manager_t<alloc_t>::timer_id_t
-timer_manager_t<alloc_t>::_insert(delay_t delay, function<void()> f)
+typename cpu_timer_manager_t<alloc_t>::timer_id_t
+cpu_timer_manager_t<alloc_t>::_insert(
+    cpu_clock_t::interval_t delay, function<void()> f
+)
 {
-    cycles_t expire = get_cycle_count() + CYCLES_PER_SECOND * delay / 1000000;
+    cpu_clock_t::time_t expire = cpu_clock_t::time_t::now() + delay;
 
-    insert:
-    {
-        auto inserted = timers.emplace(expire, f);
-
-        if (UNLIKELY(!inserted.second)) {
-            expire++;
-            goto insert;
-        }
-    }
+    // Uses the next time slot if the current one already exist.
+    while (!timers.emplace(expire, f).second)
+        expire = expire.next();
 
     return expire;
 }
 
-} } } /* namespace rusty::driver::timer */
+} } /* namespace rusty::driver */
 
 #endif /* __RUSTY_DRIVER_TIMER_HPP__ */

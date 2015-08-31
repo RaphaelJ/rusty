@@ -89,7 +89,7 @@ void mpipe_t::instance_t::run(void)
 
         result = gxio_mpipe_iqueue_try_get(&this->iqueue, &idesc);
 
-        if (result == GXIO_MPIPE_ERR_IQUEUE_EMPTY) // Queue is empty. Retries.
+        if (UNLIKELY(result == GXIO_MPIPE_ERR_IQUEUE_EMPTY)) // Queue is empty. Retries.
             continue;
 
         if (gxio_mpipe_iqueue_drop_if_bad(&this->iqueue, &idesc)) {

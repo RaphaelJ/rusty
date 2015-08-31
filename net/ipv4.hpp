@@ -106,8 +106,9 @@ struct ipv4_t {
 
     typedef ipv4_addr_t                             addr_t;
 
-    typedef typename data_link_t::timer_manager_t   timer_manager_t;
+    typedef typename data_link_t::clock_t           clock_t;
     typedef typename data_link_t::cursor_t          cursor_t;
+    typedef typename data_link_t::timer_manager_t   timer_manager_t;
 
     struct header_t {
         #if __BYTE_ORDER == __LITTLE_ENDIAN

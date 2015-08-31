@@ -60,6 +60,7 @@ struct ethernet_t {
 
     typedef ethernet_t<phys_t, alloc_t>         this_t;
 
+    typedef typename phys_t::clock_t            clock_t;
     typedef typename phys_t::cursor_t           cursor_t;
     typedef typename phys_t::timer_manager_t    timer_manager_t;
 

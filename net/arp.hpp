@@ -59,10 +59,10 @@ struct arp_t {
     // Member types
     //
 
+    typedef typename data_link_t::clock_t           clock_t;
     typedef typename data_link_t::cursor_t          cursor_t;
     typedef typename data_link_t::timer_manager_t   timer_manager_t;
     typedef typename timer_manager_t::timer_id_t    timer_id_t;
-    typedef typename timer_manager_t::delay_t       delay_t;
 
     typedef typename data_link_t::addr_t            data_link_addr_t;
     typedef typename proto_t::addr_t                proto_addr_t;
@@ -141,10 +141,10 @@ struct arp_t {
     //
 
     // Delay in microseconds (10^-6) before an ARP table entry will be removed.
-    static constexpr delay_t    ENTRY_TIMEOUT   = 3600L * 1000000L;
+    static const typename clock_t::interval_t   ENTRY_TIMEOUT;
 
     // Delay in microseconds (10^-6) to wait for an ARP resolution response.
-    static constexpr delay_t    REQUEST_TIMEOUT = 5L * 1000000L;
+    static const typename clock_t::interval_t   REQUEST_TIMEOUT;
 
     //
     // Fields
@@ -578,7 +578,7 @@ private:
     void _remove_cache_entry(net_t<proto_addr_t> addr)
     {
         // Does not remove a static entry.
-        assert(!this->addrs_cache.find(addr)->is_static);
+        assert(!this->addrs_cache.find(addr)->second.is_static);
 
         ARP_DEBUG(
             "Removes cache entry for %s", proto_t::addr_t::to_alpha(addr)
@@ -616,6 +616,14 @@ private:
 
 #undef ARP_COLOR
 #undef ARP_DEBUG
+
+template <typename data_link_t, typename proto_t, typename alloc_t>
+const typename arp_t<data_link_t, proto_t, alloc_t>::clock_t::interval_t
+arp_t<data_link_t, proto_t, alloc_t>::ENTRY_TIMEOUT(3600L * 1000000L);
+
+template <typename data_link_t, typename proto_t, typename alloc_t>
+const typename arp_t<data_link_t, proto_t, alloc_t>::clock_t::interval_t
+arp_t<data_link_t, proto_t, alloc_t>::REQUEST_TIMEOUT(5L * 1000000L);
 
 } } /* namespace rusty::net */
 
