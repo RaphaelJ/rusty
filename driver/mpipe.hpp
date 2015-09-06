@@ -93,7 +93,7 @@ struct buffer_stack_info_t {
 #else
     static const array<buffer_stack_info_t, 5> BUFFERS_STACKS {
 #endif /* MPIPE_JUMBO_FRAMES */
-    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_128,   8096), // ~ 1 MB
+    buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_128,   8192), // ~ 1 MB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_256,   1024), // ~ 256 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_512,   1024), // ~ 512 KB
     buffer_stack_info_t(GXIO_MPIPE_BUFFER_SIZE_1024,  512),  // ~ 512 KB

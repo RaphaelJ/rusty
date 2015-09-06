@@ -6,7 +6,7 @@ project (rusty)
 #
 # Memory that is required by a single core will be homed on this core.
 # Can improve the performances.
-# add_definitions(-DUSE_TILE_ALLOCATOR)
+add_definitions(-DUSE_TILE_ALLOCATOR)
 
 # Uses Jumbo Ethernet frames if supported by the remote TCP.
 #
@@ -23,7 +23,7 @@ project (rusty)
 # Can improve performances.
 add_definitions(-DBRANCH_PREDICT)
 
-# Disables debug messages and assertions.
+# Disables debug messages and assertions (implies -DNDEBUGMSG).
 #
 # Increases performances.
 add_definitions(-DNDEBUG)
@@ -31,7 +31,7 @@ add_definitions(-DNDEBUG)
 # Disable debug messages.
 #
 # Increases performances.
-# add_definitions(-DNDEBUGMSG)
+add_definitions(-DNDEBUGMSG)
 
 # End of CFLAGS
 

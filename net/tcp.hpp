@@ -678,7 +678,7 @@ struct tcp_t {
             // 'size' field to account the reception of a duplicate ack.
             void receive_duplicate_ack(void)
             {
-                dupacks++;
+                ++dupacks;
 
                 if (dupacks == 3) {
                     // We received a third duplicate ACK.
@@ -1139,6 +1139,9 @@ struct tcp_t {
 
 private:
 
+    // Vector type used in the call to '_send_data_segment()'.
+    typedef vector<typename tcb_t::tx_queue_entry_t, alloc_t>   to_send_vec_t;
+
     //
     // Connected sockets.
     //
@@ -1591,7 +1594,7 @@ private:
             if (!hdr->flags.rst)
                 this->_respond_with_ack_segment(tcb_id, tcb);
 
-            IGNORE_SEGMENT("unexpected sequence number");
+            IGNORE_SEGMENT("unexpected sequence number (duplicate ?)");
         }
 
         if (UNLIKELY(hdr->flags.rst))
@@ -1715,14 +1718,14 @@ private:
             }
 
             // When in the CLOSING state, if the FIN is acknowledged, enters
-            // the TIME-WAIT state, otherwise, ignore the segment.
+            // the TIME-WAIT state, otherwise, stop processing the segment.
             if (tcb->in_state(tcb_t::CLOSING)) {
                 if (ack == tcb->tx_window.next) {
                     TCP_TCB_STATE_CHANGE("CLOSING", "TIME-WAIT");
                     tcb->state = tcb_t::TIME_WAIT;
                     this->_schedule_fin_timeout(tcb_id, tcb);
                 } else
-                    IGNORE_SEGMENT("in CLOSING state");
+                    return;
             }
         } else if (
                tcb->in_state(tcb_t::LAST_ACK)
@@ -1888,7 +1891,7 @@ private:
             for (
                 auto it = tcb->tx_queue_sent_unack.begin();
                 ;
-                it++
+                ++it
             ) {
                 if (it == tcb->tx_queue_sent_unack.end()) {
                     // We reached the end of the unacked transmission queue.
@@ -1906,7 +1909,7 @@ private:
                 assert(it->end > it->begin);
                 assert(it->end > seq);
 
-                n_unack_entries++;
+                ++n_unack_entries;
 
                 if (it->end >= end_seq)
                     break;
@@ -1919,34 +1922,21 @@ private:
             // Allocates and copies the entries to transmit in the 'to_send'
             // vector.
 
-            typename alloc_t::template rebind<typename tcb_t::tx_queue_entry_t>
-                            ::other alloc_queue_entries(this->alloc);
-            typename tcb_t::tx_queue_entry_t *to_send =
-                alloc_queue_entries.allocate(n_entries);
+            auto to_send = allocate_shared<to_send_vec_t>(
+                this->alloc, n_entries, this->alloc
+            );
 
-            {
-                int i = 0;
+            copy(
+                tcb->tx_queue_sent_unack.begin(),
+                tcb->tx_queue_sent_unack.begin() + n_unack_entries,
+                to_send->begin()
+            );
 
-                for (
-                    auto it = tcb->tx_queue_sent_unack.begin();
-                    it != tcb->tx_queue_sent_unack.begin() + n_unack_entries;
-                    it++
-                ) {
-                    alloc_queue_entries.construct(to_send + i, *it);
-                    i++;
-                }
-
-                assert(i == n_unack_entries);
-
-                for (
-                    auto it = tcb->tx_queue_not_sent.begin();
-                    it != tcb->tx_queue_not_sent.begin() + n_not_sent_entries;
-                    it++
-                ) {
-                    alloc_queue_entries.construct(to_send + i, *it);
-                    i++;
-                }
-            }
+            copy(
+                tcb->tx_queue_not_sent.begin(),
+                tcb->tx_queue_not_sent.begin() + n_not_sent_entries,
+                to_send->begin() + n_unack_entries
+            );
 
             // Sends the segment.
 
@@ -1956,7 +1946,8 @@ private:
                            && tcb->tx_queue_sent_unack.back().end == end_seq;
 
             this->_send_data_segment(
-                tcb_id, tcb, seq, to_send, n_entries, payload_size, has_fin
+                tcb_id, tcb, seq, to_send, to_send->begin(), to_send->end(),
+                payload_size, has_fin
             );
         }
     }
@@ -2223,7 +2214,7 @@ private:
                 swap(*it, tcb->out_of_order.back());
                 tcb->out_of_order.pop_back();
             } else
-                it++;
+                ++it;
         }
     }
 
@@ -2372,99 +2363,105 @@ private:
         // First sequence number that is outside of the transmission window.
         seq_t end_of_win = tcb->tx_window.end();
 
-        // Sends one or more data segments.
-        int emitted_segs = 0;
-        while (end_of_win > tcb->tx_window.next) {
-            // First sequence number that can't be send in this segment or
-            // which is not in the current transmission window.
-            seq_t end_of_seg = min(
-                end_of_win, tcb->tx_window.next + (seq_t) tcb->tx_window.mss
-            );
+        if (end_of_win <= tcb->tx_window.next)
+            return;
 
-            // Counts the number of entries in the transmission queue
-            // which can be sent before removing them. Does this to only perform
-            // a single dynamic allocation of the 'to_send' vector.
-            int     n_entries    = 0;
-            size_t  payload_size = 0;
+        //
+        // Copies the entries of the transmission queue that will be delivered
+        // as the transmission queue could be reallocated when the transmission
+        // occurs, and moves entirely transmitted entries to the
+        // 'tx_queue_sent_unack' queue.
+        //
+
+        shared_ptr<vector<typename tcb_t::tx_queue_entry_t, alloc_t>> to_send;
+
+        {
+            // Counts the number of entries in the transmission window that will
+            // be delivered.
+            int n_entries = 0;
             for (
                 auto it = tcb->tx_queue_not_sent.begin();
-                it != tcb->tx_queue_not_sent.end();
-                it++
+                it != tcb->tx_queue_not_sent.end() && end_of_win > it->begin;
+                ++it
             ) {
                 // Paranoia checks.
                 assert(it->end > it->begin);
                 assert(it->end > tcb->tx_window.next);
-
-                payload_size += (it->end - it->begin).value;
                 ++n_entries;
+            }
 
-                if (it->end >= end_of_seg) {
-                    // The end of the transmission window is entirely contained
-                    // in this entry.
-                    payload_size -= (it->end - end_of_seg).value;
+            assert(n_entries > 0);
+
+            to_send = allocate_shared<to_send_vec_t>(
+                this->alloc, n_entries, this->alloc
+            );
+
+            // Copies entries and moves entries that will be fully delivered to
+            // the 'tx_queue_sent_unack' queue.
+            for (int i = 0; i < n_entries; ++i) {
+                const auto &entry = tcb->tx_queue_not_sent.front();
+
+                (*to_send)[i] = entry;
+
+                if (entry.end <= end_of_win) {
+                    // Copies entries that will be entirely transmitted.
+                    tcb->tx_queue_sent_unack.push_back(entry);
+                    tcb->tx_queue_not_sent.pop_front();
+                } else {
+                    // Must be the last entry.
+                    assert(i + 1 == n_entries);
                     break;
                 }
             }
+        }
 
-            if (n_entries < 1) {
-                // No more data in the transmission queue.
-                break;
-            }
+        //
+        // Sends the pending entries in one or more data segments.
+        //
 
-            // Fixes the value of 'payload_size' by removing the section
-            // of the first entry which already been sent.
-            {
-                auto front = tcb->tx_queue_not_sent.front();
-                payload_size -= (tcb->tx_window.next - front.begin).value;
-            }
+        // First sequence number which is outside of the transmission window or
+        // not in the data to transmit.
+        seq_t end_of_transmission = min(end_of_win, to_send->back().end);
 
-            // Set of entries to be sent.
-            //
-            // Copies the entries to send in a newly allocated vector as those
-            // can be modified while th segment is transmitted.
-            typename alloc_t::template rebind<typename tcb_t::tx_queue_entry_t>
-                            ::other alloc_queue_entries(this->alloc);
-            typename tcb_t::tx_queue_entry_t *to_send =
-                alloc_queue_entries.allocate(n_entries);
+        assert(end_of_transmission > tcb->tx_window.next);
 
-            {
-                int i = 0;
-                for (
-                    auto it = tcb->tx_queue_not_sent.begin();
-                    it != tcb->tx_queue_not_sent.begin() + n_entries;
-                    it++
-                ) {
-                    alloc_queue_entries.construct(to_send + i, *it);
-                    i++;
-                }
-            }
+        auto to_send_it = to_send->begin();
 
-            // Moves entries from the 'tx_queue_not_sent' queue to the
-            // 'tx_queue_sent_unack' queue.
-            for (int i = 0; i < n_entries - 1; i++) {
-                const auto &entry = tcb->tx_queue_not_sent.front();
-                tcb->tx_queue_sent_unack.push_back(entry);
-                tcb->tx_queue_not_sent.pop_front();
-            }
+        do {
+            // First sequence number that can't be send in this segment or
+            // which is not in the data to send.
+            seq_t end_of_seg = min(
+                end_of_transmission,
+                tcb->tx_window.next + (seq_t) tcb->tx_window.mss
+            );
 
-            // Moves the last entry to the 'tx_queue_sent_unack' only if
-            // it is to be entirely send.
-            {
-                const auto &entry = tcb->tx_queue_not_sent.front();
-                if (entry.end <= end_of_seg) {
-                    tcb->tx_queue_sent_unack.push_back(entry);
-                    tcb->tx_queue_not_sent.pop_front();
-                }
-            }
-
+            size_t payload_size = (end_of_seg - tcb->tx_window.next).value;
+            assert(payload_size > 0);
             assert(payload_size <= tcb->tx_window.mss);
             assert(payload_size <= tcb->tx_window.ready());
+
+            assert(to_send_it != to_send->end());
+
+            // Finds the first entry that will be sent in this segement.
+            for (; to_send_it->end <= tcb->tx_window.next; ++to_send_it)
+                ;
+
+            // Finds the first entry that will not be sent in this segment.
+            auto to_send_end_it = to_send_it + 1;
+            for (
+                ;
+                   to_send_end_it != to_send->end()
+                && to_send_end_it->end <= end_of_seg;
+                ++to_send_end_it
+            )
+                ;
 
             bool has_fin =    tcb->in_state(tcb_t::FIN_WAIT_1 | tcb_t::LAST_ACK)
                            && tcb->tx_queue_not_sent.empty();
 
             this->_send_data_segment(
-                tcb_id, tcb, tcb->tx_window.next, to_send, n_entries,
+                tcb_id, tcb, tcb->tx_window.next,/* to_send, n_entries, */
+                to_send, to_send_it, to_send_end_it,
                 payload_size, has_fin
             );
 
@@ -2480,11 +2477,9 @@ private:
 
             if (has_fin)
                 ++tcb->tx_window.next; // Transmitted FIN control bit.
+        } while (end_of_transmission > tcb->tx_window.next);
 
-            emitted_segs++;
-        }
-
-        if (!tcb->has_timer && emitted_segs > 0)
+        if (!tcb->has_timer)
             this->_schedule_retransmission_timer(tcb_id, tcb);
     }
 
@@ -2497,44 +2492,43 @@ private:
     // <SEQ=seq><ACK=RCV.NXT><CTL=ACK><payload>.
     void _send_data_segment(
         tcb_id_t tcb_id, const tcb_t *tcb, seq_t seq,
-        typename tcb_t::tx_queue_entry_t *to_send, size_t n_entries,
+        shared_ptr<to_send_vec_t> to_send,
+        typename to_send_vec_t::const_iterator begin,
+        typename to_send_vec_t::const_iterator end,
         size_t payload_size, bool has_fin
     )
     {
+        assert(begin != end);
+
         // Creates a function which writes the content of multiple transmission
         // queue entries into a single network buffer.
         function<partial_sum_t(cursor_t)> payload_writer =
-            [this, start_seq = seq, to_send, n_entries](cursor_t cursor)
+            [this, start_seq = seq, to_send, begin, end](cursor_t cursor)
             {
-                assert(n_entries > 0);
+                assert(to_send->size() > 0);
 
                 seq_t         seq = start_seq;
                 partial_sum_t partial_sum = partial_sum_t::ZERO;
 
-                for (int i = 0; i < n_entries; i++) {
-                    const auto *entry = &to_send[i];
-                    assert(!cursor.empty());
-                    assert(entry->begin <= seq);
-                    assert(entry->end > seq);
+                for (auto it = begin; it != end; ++it) {
+                    const auto &entry = *it;
 
-                    size_t offset = (seq - entry->begin).value,
-                           length = (entry->end - seq).value;
+                    assert(!cursor.empty());
+                    assert(entry.begin <= seq);
+                    assert(entry.end > seq);
+
+                    size_t offset = (seq - entry.begin).value,
+                           length = (entry.end - seq).value;
 
                     partial_sum = partial_sum.append(
-                        entry->writer(offset, cursor.take(length))
+                        entry.writer(offset, cursor.take(length))
                     );
                     cursor = cursor.drop(length);
 
-                    seq = entry->end;
+                    seq = entry.end;
                 }
 
                 assert(cursor.empty());
-
-                // Frees the 'to_send' vector.
-                typename alloc_t
-                        ::template rebind<typename tcb_t::tx_queue_entry_t>
-                        ::other alloc_queue_entries(this->alloc);
-                alloc_queue_entries.deallocate(to_send, n_entries);
 
                 return partial_sum;
             };
@@ -2659,7 +2653,7 @@ private:
     }
 
     // Pushes the given segment with its payload to the network layer.
-    void _send_segment(
+    inline void _send_segment(
         tcb_id_t tcb_id, net_t<seq_t> seq, net_t<seq_t> ack, flags_t flags,
         net_t<win_size_t> window, options_t options,
         function<partial_sum_t(cursor_t)> payload_writer, size_t payload_size
@@ -2845,7 +2839,7 @@ tcp_t<network_t, alloc_t>::_parse_options(
 
             // No-operation option
             case TCPOPT_NOP:
-                data++;
+                ++data;
                 continue;
 
             // Maximum segment size option
